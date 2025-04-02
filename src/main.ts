@@ -6,8 +6,6 @@ import {
 	Setting,
 	TFile,
 	TFolder,
-	PluginSettingTab,
-	addIcon,
 } from "obsidian";
 import { PinataSettingTab } from "./settings";
 
@@ -63,7 +61,9 @@ class CommandsModal extends Modal {
 		// Process current file
 		new Setting(contentEl)
 			.setName("Process current file")
-			.setDesc("Upload all local images in the current file to IPFS")
+			.setDesc(
+				"Upload all images (local and remote) in the current file to IPFS"
+			)
 			.addButton((btn) =>
 				btn
 					.setButtonText("Process")
@@ -97,7 +97,7 @@ class CommandsModal extends Modal {
 		new Setting(contentEl)
 			.setName("Process current folder")
 			.setDesc(
-				"Upload all local images in markdown files within the current folder"
+				"Upload all images (local and remote) in markdown files within the current folder"
 			)
 			.addButton((btn) =>
 				btn
@@ -135,7 +135,9 @@ class CommandsModal extends Modal {
 		// Process all files
 		new Setting(contentEl)
 			.setName("Process all files")
-			.setDesc("Upload all local images in all markdown files")
+			.setDesc(
+				"Upload all images (local and remote) in all markdown files to IPFS"
+			)
 			.addButton((btn) =>
 				btn
 					.setButtonText("Process")
@@ -156,21 +158,6 @@ class CommandsModal extends Modal {
 							);
 						}
 					})
-			);
-
-		// Settings button
-		new Setting(contentEl)
-			.setName("Settings")
-			.setDesc("Configure Pinata IPFS settings")
-			.addButton((btn) =>
-				btn.setButtonText("Open Settings").onClick(() => {
-					this.close();
-					const { workspace } = this.app;
-					workspace.trigger("obsidian:open-settings");
-					workspace.trigger(
-						"plugin-settings:obsidian-pinata-image-uploader"
-					);
-				})
 			);
 	}
 
@@ -271,15 +258,70 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		// Add settings tab
 		this.addSettingTab(new PinataSettingTab(this.app, this));
 
-		// Add ribbon icon
-		addIcon(
-			"pinata",
-			'<svg viewBox="0 0 100 100"><path fill="currentColor" d="M50 0C22.4 0 0 22.4 0 50s22.4 50 50 50 50-22.4 50-50S77.6 0 50 0zm0 90c-22.1 0-40-17.9-40-40s17.9-40 40-40 40 17.9 40 40-17.9 40-40 40z"/><path fill="currentColor" d="M50 20c-16.5 0-30 13.5-30 30s13.5 30 30 30 30-13.5 30-30-13.5-30-30-30zm0 50c-11 0-20-9-20-20s9-20 20-20 20 9 20 20-9 20-20 20z"/></svg>'
-		);
-
-		this.addRibbonIcon("pinata", "Pinata IPFS Commands", () => {
+		this.addRibbonIcon("image-up", "Pinata IPFS Commands", () => {
 			new CommandsModal(this).open();
 		});
+
+		// Register protocol handler for IPFS URLs
+		this.registerMarkdownPostProcessor((element, context) => {
+			const images = Array.from(element.querySelectorAll("img"));
+			for (const img of images) {
+				const src = img.getAttribute("src");
+				if (!src?.startsWith("ipfs://")) continue;
+
+				// Extract IPFS hash
+				const ipfsHash = src.replace("ipfs://", "");
+
+				// Check if image is private based on alt text
+				const isPrivate = img.alt === "private";
+
+				// Create a placeholder URL until we can load the real one
+				img.setAttribute(
+					"src",
+					"data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iI2YwZjBmMCIvPjx0ZXh0IHg9IjUwIiB5PSI1MCIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjEyIiBmaWxsPSIjNjY2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSI+TG9hZGluZy4uLjwvdGV4dD48L3N2Zz4="
+				);
+
+				// Store IPFS data for reference
+				img.setAttribute("data-ipfs-hash", ipfsHash);
+				if (isPrivate) {
+					img.setAttribute("data-pinata-private", "true");
+				}
+
+				// Load the actual image
+				this.constructIpfsUrl(ipfsHash)
+					.then((gatewayUrl) => {
+						img.setAttribute("src", gatewayUrl);
+					})
+					.catch((error) => {
+						console.error("Failed to load IPFS image:", error);
+						img.classList.add("ipfs-load-error");
+					});
+			}
+		});
+
+		// Register interval to refresh private URLs periodically
+		this.registerInterval(
+			window.setInterval(() => {
+				const privateImages = Array.from(
+					document.querySelectorAll('img[data-pinata-private="true"]')
+				);
+				for (const img of privateImages) {
+					const ipfsHash = img.getAttribute("data-ipfs-hash");
+					if (!ipfsHash) continue;
+
+					this.constructIpfsUrl(ipfsHash)
+						.then((gatewayUrl) => {
+							img.setAttribute("src", gatewayUrl);
+						})
+						.catch((error) => {
+							console.error(
+								"Failed to refresh private URL:",
+								error
+							);
+						});
+				}
+			}, 1000 * 60 * 30) // Refresh every 30 minutes
+		);
 
 		this.addCommands();
 		this.registerHandlers();
@@ -437,6 +479,59 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		return url;
 	}
 
+	private async handlePaste(evt: ClipboardEvent, editor: Editor) {
+		if (!evt.clipboardData?.types.some((type) => type.startsWith("image/")))
+			return;
+		evt.preventDefault();
+
+		try {
+			for (const item of Array.from(evt.clipboardData.items)) {
+				if (item.type.startsWith("image/")) {
+					const blob = item.getAsFile();
+					if (!blob) continue;
+
+					const url = await this.handleImageUpload(blob);
+					const cursor = editor.getCursor();
+					// Insert the URL directly, not wrapped in image markdown
+					editor.replaceRange(url, cursor);
+				}
+			}
+		} catch (error) {
+			new Notice(
+				`Failed to upload pasted image: ${
+					error instanceof Error ? error.message : String(error)
+				}`
+			);
+		}
+	}
+
+	private async handleDrop(evt: DragEvent, editor: Editor) {
+		const files = evt.dataTransfer?.files;
+		if (!files?.length) return;
+
+		const imageFiles = Array.from(files).filter((file) =>
+			file.type.startsWith("image/")
+		);
+		if (!imageFiles.length) return;
+
+		evt.preventDefault();
+
+		try {
+			for (const file of imageFiles) {
+				const url = await this.handleImageUpload(file);
+				const cursor = editor.getCursor();
+				// Insert the URL directly, not wrapped in image markdown
+				editor.replaceRange(url, cursor);
+			}
+		} catch (error) {
+			new Notice(
+				`Failed to upload dropped image: ${
+					error instanceof Error ? error.message : String(error)
+				}`
+			);
+		}
+	}
+
 	private async handleImageUpload(
 		file: TFile | File | Blob
 	): Promise<string> {
@@ -459,8 +554,10 @@ export default class PinataImageUploaderPlugin extends Plugin {
 				await this.backupImage(file);
 			}
 
-			const url = await this.constructIpfsUrl(ipfsHash);
-			return url;
+			// Return the complete markdown syntax
+			return this.settings.isPrivate
+				? `![private](ipfs://${ipfsHash})`
+				: `![](ipfs://${ipfsHash})`;
 		} catch (error) {
 			console.error(
 				`Failed to upload image ${
@@ -652,86 +749,304 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		}
 	}
 
-	private async handlePaste(evt: ClipboardEvent, editor: Editor) {
-		if (!evt.clipboardData?.types.some((type) => type.startsWith("image/")))
-			return;
-		evt.preventDefault();
-
+	private async downloadRemoteImage(url: string): Promise<Blob> {
 		try {
-			for (const item of Array.from(evt.clipboardData.items)) {
-				if (item.type.startsWith("image/")) {
-					const blob = item.getAsFile();
-					if (!blob) continue;
-
-					const url = await this.handleImageUpload(blob);
-					const cursor = editor.getCursor();
-					editor.replaceRange(`![](${url})`, cursor);
-				}
+			const response = await fetch(url);
+			if (!response.ok) {
+				throw new Error(
+					`Failed to download image: ${response.statusText}`
+				);
 			}
+			return await response.blob();
 		} catch (error) {
-			new Notice(
-				`Failed to upload pasted image: ${
-					error instanceof Error ? error.message : String(error)
-				}`
-			);
+			console.error(`Failed to download image from ${url}:`, error);
+			throw error;
 		}
 	}
 
-	private async handleDrop(evt: DragEvent, editor: Editor) {
-		const files = evt.dataTransfer?.files;
-		if (!files?.length) return;
-
-		const imageFiles = Array.from(files).filter((file) =>
-			file.type.startsWith("image/")
-		);
-		if (!imageFiles.length) return;
-
-		evt.preventDefault();
-
+	private isRemoteUrl(url: string): boolean {
 		try {
-			for (const file of imageFiles) {
-				const url = await this.handleImageUpload(file);
-				const cursor = editor.getCursor();
-				editor.replaceRange(`![](${url})`, cursor);
-			}
-		} catch (error) {
-			new Notice(
-				`Failed to upload dropped image: ${
-					error instanceof Error ? error.message : String(error)
-				}`
-			);
+			new URL(url);
+			return url.startsWith("http://") || url.startsWith("https://");
+		} catch {
+			return false;
 		}
+	}
+
+	private extractOriginalUrl(url: string): string {
+		try {
+			const parsedUrl = new URL(url);
+			const hostname = parsedUrl.hostname;
+			const pathname = parsedUrl.pathname;
+			const searchParams = parsedUrl.searchParams;
+
+			// Image optimization and CDN services
+			switch (hostname) {
+				// wsrv.nl (images.weserv.nl)
+				case "wsrv.nl":
+				case "images.weserv.nl":
+					const weservUrl = searchParams.get("url");
+					if (weservUrl) return weservUrl;
+					break;
+
+				// Cloudinary
+				case "res.cloudinary.com":
+					// Format: https://res.cloudinary.com/[cloud_name]/image/[delivery_type]/[transformations]/[version]/[public_id].[extension]
+					const cloudinaryParts = pathname.split("/");
+					if (cloudinaryParts.length > 4) {
+						const cloudName = cloudinaryParts[1];
+						const publicIdWithExt =
+							cloudinaryParts[cloudinaryParts.length - 1];
+						return `https://res.cloudinary.com/${cloudName}/image/upload/${publicIdWithExt}`;
+					}
+					break;
+
+				// Imgix
+				case hostname.match(/.*\.imgix\.net$/)?.input:
+					// Remove transformation parameters
+					return `${parsedUrl.origin}${pathname}`;
+
+				// ImageKit
+				case hostname.match(/.*\.imagekit\.io$/)?.input:
+					// Remove transformation parameters
+					return `${parsedUrl.origin}${pathname}`;
+
+				// Akamai Image Manager
+				case hostname.match(/.*\.akamaized\.net$/)?.input:
+					return `${parsedUrl.origin}${pathname}`;
+
+				// Fastly Image Optimizer
+				case hostname.match(/.*\.fastly\.net$/)?.input:
+					return `${parsedUrl.origin}${pathname}`;
+
+				// Bunny.net Image CDN
+				case hostname.match(/.*\.b-cdn\.net$/)?.input:
+					return `${parsedUrl.origin}${pathname}`;
+
+				// KeyCDN Image Processing
+				case hostname.match(/.*\.kxcdn\.com$/)?.input:
+					return `${parsedUrl.origin}${pathname}`;
+
+				// WordPress.com Photon
+				case "i0.wp.com":
+				case "i1.wp.com":
+				case "i2.wp.com":
+				case "i3.wp.com":
+					const wpcomUrl = pathname.substring(1); // Remove leading slash
+					if (wpcomUrl.startsWith("http")) {
+						return wpcomUrl;
+					}
+					break;
+
+				// Amazon CloudFront
+				case hostname.match(/.*\.cloudfront\.net$/)?.input:
+					return `${parsedUrl.origin}${pathname}`;
+
+				// Firebase Storage
+				case "firebasestorage.googleapis.com":
+					return url;
+
+				// Shopify CDN
+				case hostname.match(/.*\.shopify\.com$/)?.input:
+					// Remove image transformations
+					const shopifyPath = pathname.replace(
+						/_(small|medium|large|grande|original|[0-9]+x[0-9]+|pico|icon|thumb|compact|master)\./,
+						"."
+					);
+					return `${parsedUrl.origin}${shopifyPath}`;
+
+				// Contentful Images
+				case "images.ctfassets.net":
+					return `${parsedUrl.origin}${pathname}`;
+
+				// Sirv
+				case hostname.match(/.*\.sirv\.com$/)?.input:
+					return `${parsedUrl.origin}${pathname}`;
+
+				// Uploadcare
+				case "ucarecdn.com":
+					// Remove transformation parameters
+					const uploadcarePath = pathname.split("/-/")[0];
+					return `${parsedUrl.origin}${uploadcarePath}`;
+
+				// Vercel Image Optimization
+				case hostname.match(/.*\.vercel\.app$/)?.input:
+					const vercelUrl = searchParams.get("url");
+					if (vercelUrl) return vercelUrl;
+					break;
+			}
+
+			// If no specific CDN pattern is matched, return the original URL
+			return url;
+		} catch {
+			return url;
+		}
+	}
+
+	private isKnownCdnDomain(hostname: string): boolean {
+		const cdnPatterns = [
+			/\.cloudfront\.net$/,
+			/\.akamaized\.net$/,
+			/\.fastly\.net$/,
+			/\.b-cdn\.net$/,
+			/\.kxcdn\.com$/,
+			/\.imgix\.net$/,
+			/\.imagekit\.io$/,
+			/\.sirv\.com$/,
+			/\.shopify\.com$/,
+			/\.vercel\.app$/,
+			/\.cloudinary\.com$/,
+			/images\.weserv\.nl$/,
+			/wsrv\.nl$/,
+			/\.wp\.com$/,
+			/ucarecdn\.com$/,
+			/images\.ctfassets\.net$/,
+			/firebasestorage\.googleapis\.com$/,
+		];
+
+		return cdnPatterns.some((pattern) => pattern.test(hostname));
 	}
 
 	async processFile(file: TFile) {
 		try {
 			const content = await this.app.vault.read(file);
-			const imageRegex =
-				/!\[([^\]]*)\]\((?!https?:\/\/|ipfs:\/\/|data:)([^)]+)\)/g;
+			const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
 			let newContent = content;
 			let modified = false;
+			let processedUrls = new Map<string, string>(); // Track original URLs to their IPFS replacements
 
 			for (const match of content.matchAll(imageRegex)) {
 				try {
 					const [fullMatch, alt, imagePath] = match;
-					const imageFile =
-						this.app.metadataCache.getFirstLinkpathDest(
-							decodeURIComponent(imagePath),
-							file.path
-						);
+					const decodedPath = decodeURIComponent(imagePath);
 
-					if (imageFile instanceof TFile) {
-						const url = await this.handleImageUpload(imageFile);
+					// Check if we've already processed this URL in this file
+					if (processedUrls.has(decodedPath)) {
 						newContent = newContent.replace(
 							fullMatch,
-							`![${alt}](${url})`
+							`![${alt}](${processedUrls.get(decodedPath)})`
 						);
 						modified = true;
+						continue;
+					}
+
+					// Skip if already on IPFS or Pinata
+					if (
+						decodedPath.includes("ipfs://") ||
+						decodedPath.includes("pinata.cloud")
+					) {
+						continue;
+					}
+
+					if (this.isRemoteUrl(decodedPath)) {
+						// Handle remote image
+						const originalUrl =
+							this.extractOriginalUrl(decodedPath);
+
+						try {
+							const parsedUrl = new URL(decodedPath);
+							// Only process if it's a known CDN or if the URL points directly to an image
+							if (
+								this.isKnownCdnDomain(parsedUrl.hostname) ||
+								this.isImageUrl(decodedPath)
+							) {
+								const imageBlob =
+									await this.downloadRemoteImage(originalUrl);
+								const fileName = `remote-${Date.now()}.${this.getFileExtFromUrl(
+									originalUrl
+								)}`;
+								const url = await this.handleImageUpload(
+									imageBlob
+								);
+
+								// Store the processed URL
+								processedUrls.set(decodedPath, url);
+
+								// Replace all instances of this image in the document
+								const imageRegexEscaped = new RegExp(
+									`!\\[([^\\]]*)\\]\\(${this.escapeRegExp(
+										imagePath
+									)}\\)`,
+									"g"
+								);
+								newContent = newContent.replace(
+									imageRegexEscaped,
+									`![${alt}](${url})`
+								);
+								modified = true;
+							}
+						} catch (error) {
+							console.error(
+								`Failed to process remote image: ${decodedPath}`,
+								error
+							);
+							new Notice(
+								`Failed to process remote image: ${
+									error instanceof Error
+										? error.message
+										: String(error)
+								}`
+							);
+						}
+					} else {
+						// Handle local image
+						const imageFile =
+							this.app.metadataCache.getFirstLinkpathDest(
+								decodedPath,
+								file.path
+							);
+
+						if (imageFile instanceof TFile) {
+							try {
+								const url = await this.handleImageUpload(
+									imageFile
+								);
+
+								// Store the processed URL
+								processedUrls.set(decodedPath, url);
+
+								// Replace all instances of this image in the document
+								const imageRegexEscaped = new RegExp(
+									`!\\[([^\\]]*)\\]\\(${this.escapeRegExp(
+										imagePath
+									)}\\)`,
+									"g"
+								);
+								newContent = newContent.replace(
+									imageRegexEscaped,
+									`![${alt}](${url})`
+								);
+								modified = true;
+
+								if (this.settings.backupOriginalImages) {
+									await this.backupImage(imageFile);
+								}
+							} catch (error) {
+								console.error(
+									`Failed to process local image: ${decodedPath}`,
+									error
+								);
+								new Notice(
+									`Failed to process local image: ${
+										error instanceof Error
+											? error.message
+											: String(error)
+									}`
+								);
+							}
+						}
 					}
 				} catch (error) {
 					console.error(
 						`Failed to process image in ${file.name}:`,
 						error
+					);
+					new Notice(
+						`Failed to process image in ${file.name}: ${
+							error instanceof Error
+								? error.message
+								: String(error)
+						}`
 					);
 				}
 			}
@@ -744,6 +1059,38 @@ export default class PinataImageUploaderPlugin extends Plugin {
 			new Notice(`Failed to process ${file.name}`);
 			console.error(error);
 		}
+	}
+
+	private getFileExtFromUrl(url: string): string {
+		try {
+			const pathname = new URL(url).pathname;
+			const ext = pathname.split(".").pop()?.toLowerCase();
+			return ext && ["jpg", "jpeg", "png", "gif", "webp"].includes(ext)
+				? ext
+				: "jpg";
+		} catch {
+			return "jpg";
+		}
+	}
+
+	private isImageUrl(url: string): boolean {
+		// Check if the URL ends with a common image extension
+		const imageExtensions = [
+			".jpg",
+			".jpeg",
+			".png",
+			".gif",
+			".webp",
+			".bmp",
+			".tiff",
+			".svg",
+		];
+		const lowercaseUrl = url.toLowerCase();
+		return imageExtensions.some((ext) => lowercaseUrl.endsWith(ext));
+	}
+
+	private escapeRegExp(string: string): string {
+		return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	}
 
 	async processFolder(folder: TFolder) {

@@ -71,3 +71,33 @@ If your plugin does not need CSS, delete this file.
 .setting-item button:not(.mod-warning):hover {
 	background-color: var(--interactive-accent-hover);
 }
+
+/* IPFS Image Styles */
+img[data-pinata-private="true"] {
+	border: 1px solid var(--interactive-accent);
+	border-radius: 4px;
+	padding: 2px;
+}
+
+img[data-pinata-private="true"]::after {
+	content: "🔒";
+	display: inline-block;
+	position: relative;
+	top: -8px;
+	left: 4px;
+	font-size: 14px;
+}
+
+.ipfs-load-error {
+	border: 2px solid var(--text-error);
+	opacity: 0.7;
+}
+
+.ipfs-load-error::after {
+	content: "⚠️ IPFS Load Failed";
+	display: block;
+	color: var(--text-error);
+	font-size: 0.8em;
+	text-align: center;
+	margin-top: 4px;
+}
