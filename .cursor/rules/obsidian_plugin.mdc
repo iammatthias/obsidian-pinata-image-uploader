@@ -1,0 +1,135 @@
+---
+description: This rule explains Obsidian Plugin conventions and best practices for development.
+globs: 
+alwaysApply: false
+---
+# Obsidian Plugin Development Guidelines (with Pinata IPFS Integration)
+
+This document defines coding standards and best practices for building Obsidian plugins, with a specific focus on integrating **Pinata's Private IPFS** capabilities. Following these guidelines helps ensure consistency, performance, maintainability, secure external data handling, and effective integration.
+
+---
+
+## Prerequisites
+
+Before starting, ensure you have the following installed:
+-   **Node.js:** (Check the Obsidian documentation for recommended versions)
+-   **npm** (usually included with Node.js) or **yarn**
+
+---
+
+## 1. Getting Started & Foundational Structure
+
+Begin your project using official resources and adhere to Obsidian's core plugin structure, as detailed in the [Anatomy of a plugin](https://docs.obsidian.md/Plugins/Getting+started/.
+
+-   **Use the Official Template:** It is **highly recommended** to start by cloning or using the official ](https://github.com/obsidianmd/obsidian-sample-plugin) as your base.
+-   **Entry Point (`main.ts`):**
+    -   Your plugin's entry point **must** be `main.ts`.
+    -   This file **must** contain a class extending Obsidian’s `Plugin` class, implementing `onload()` and `onunload()`.
+-   **Manifest (`manifest.json`):**
+    -   Maintain an accurate `manifest.json` in the root directory.
+    -   **Required Fields:** Include at least `id`, `name`, `version`, `minAppVersion`, `description`, and `author`. Keep `version` and `minAppVersion` updated. See [Submission requirements](mdc:https:/docs.obsidian.md/Plugins/Releasing/Submission+requirements+for+plugins).
+-   **Styling (`styles.css`/`scss`):**
+    -   Use a dedicated `styles.css` (or `.scss`) file for all plugin-s. Scope styles carefully.
+    -   **Util Vesbsidialt-in [CSS variables](mdc:https:/docs.obsidian.md/Reference/CSS+variables/App+variables) for consistency with themes.
+-   **Recommended Code Organization:**
+    -   Organize reusable UI components under `src/components/`. Use `PascalCase` for component filenames.
+    -   Separate utility functions (`src/utils/`) and type definitions (`src/types/`).
+    -   **Mandate TypeScript** within UI framework components (`<script lang="ts">` for Svelte) for type safety.
+
+---
+
+## 2. Core APIs: Lifecycle, Vault, Events, Editor
+
+Master Obsidian's core APIs to interact with the application state.
+
+-   **Plugin Lifecycle (`onload()` / `onunload()`):** Implement correctly for setup and crucial cleanup.
+-   **Vault API:** Use the [Vault API](mdc:https:/docs.obsidian.md/Plugins/Vault) for local file/folder interactions.
+-   **Events API:** Use the [Events API](mdc:https:/docs.obsidian.md/Plugins/Events) to react to changes, rememunregister listeners.
+-   **Editor API:** Use the [Editor API](mdc:https:/docs.obsidian.md/Plugins/Editor/Editor) for interacting with Markdown content and editor state.
+
+---
+
+## 3. User Interface & Interactite seamlessly with Obsidian's UI paradigms, detailed in [About user interface](mdc:https:/docs.obsidian/User+interface/About+user+interface).
+
+- stency:** Adhere to Obsidian's UI guidelines using standard [HTML elemenbsidir+interface/HTML+elements) and built-in componerkspace & Views:** Manage UI using the [Workspace API](mdc:https:/docs.obsidian.md/Plugins/User+interface/Workspace) and custom [Viewsan.md/Plugins/User+interface/Views). Optimize with [Deferred Views](mdc:https:/docs.obsidiauides/Understanding+deferred+views).
+-   **Interaction Points:** Utilize [Commands](mdc:https:/docs.obsidian.md/Plugins/User+interface/Commands), [Status bar]obsidian.md/Plugins/User+interface/Statu, [Settings](mdc:https:/docs.obsidian.minterface/Settings), [Ribbon actions](mdc:https:/dian.md/Plugins/User+interface/Ribbon+actions), [Modals](mdc:https:/docs.obsidian.md/Plugins/User+interface/Modals), [Icondocs.obsidian.md/Plugins/User+interface/Icons), axt menus](mdc:https:/docs.obsidian.md/Plugins/Context+menus).
+
+---
+
+## 4. Component Design & Fra
+
+Follow consistent patterns, especialn using UI frameworks.
+
+-   **Naming & Responsibility:** Use `PascalCasets; design for single responsibility.
+-   **Frameworks:** Adhere to specific framework guidance:
+    -   Svelte: [Use Svelte in your Plugin](mdc:https:/docs.obsidian.md/Plugins/Getting+started/Use+Svelte+in+your+plugin)
+    -   React: [Use React in your Plugin](https://docs.obsidian.md/PlReact+in+your+pl* Employ TypeScript rigorously.
+
+---
+
+## 5. Data Handling & State Management
+
+Manage internal state and external data sources appropriately.
+
+-   **Asynchronous Operations:** Use `async/await` with robust `try...catch` error handling for all I/O, including `Vault` operations and **external API calls** (like Pinata).
+-   **State Management:** Prefer local component state. Use Obsidian's settings for persistence (e.g., API keys). Handle state related to external operations (loading, success, error).Pinata IPFS Integration (Private Files)
+
+When integrating **Pinata's Private IPFS storage** into your Obsidian plugin, adhere to these guidelines:
+
+-   **Primary Documentation:** Base your integration on the official Pinata documentation for **Private Files**: [https://docs.pinata.cloud/files/private-ipfs](mdc:https:/docs.pinata.cloud/files/private-ipfs)
+-   **Authentication & API Keys:**
+    -   Use Pinata's recommended authentication method (typically API Key + SecSecure Key Storage:** be hardcoded in your plugin source. Use Obsidian's `Settings` API (`loadData`, `saveData`) to securely store and retrieve user-provided Pinata credentials. Clearly instruct users on how to obtain and configure their keys in the plugin settings.
+-   **API/SDK Usage:**
+    -   Utilize the specific Pinata API endpoints or official SDK methods designated for **uploading, managing, and retrieving private files**. Do not assume public IPFS methods or gateways will work for private content.
+    -   Follow Pinata's examples for constructing authenticated requests.
+-   **Error Handling:**
+    -   Implement comprehensive error handling for all interactions with the Pinata API.
+    -   Specifically handle potential errors like: invalid authentication, file size limits, upload/download failures, network issues, Pinata service errors, rate limits, and file-not-found errors for private content.
+    -   Provide clear, user-friendly feedback via Obsidian's `Notice` API when errors occur.
+-   **User Experience:**
+    -   Provide visual feedback during potentially long operations ds (e.g., loading indicators in the status bar or modals).
+    -   Clearly indicate which files are managed via Pinata within the Obsidian UI, if applicable.
+    -   Be mindful of potential costs associated with Pinata storage and bandwidth; inform theusage is expected.
+-   **Gateway Access:** Understand that acceiles will require authenticated requests through Pinata's infrastructure or SDK, not via public IPFS gateways. Ensure your retrieval logic reflects this.
+
+---
+
+## 7. Form Handling & Validation
+
+Ensure user  for are handled effectively.
+
+-   **Input Design: Obsidian form comttings for clarity.
+-   **Validation:** Implement client-side valul (e.g., checking if API key fields are filled). Pinata API calls will serve as server- credentials.
+
+---
+
+## 8. Error Handling, Logging & Performance
+
+Builspecially when dealing with network dependencies.
+
+-   **Error Catching:**s and related logic in `try...catch`.
+-   **User Messaging:** Use Obsidian's `Notice` API for feedback on Pinata operations (success, failure).
+-   **Logging:** Use `console.*` methods for debugging Pinata interactions during development.
+-   **Performance:** Network requests to Pinata should be asynchronous and non-blocking. Use loading states to prevent UI freezing. Consider Obsidian's [Optimizing Plugin Load Time](mdc:https:/docs.obsidian.md/Plugins/Guides/Optimizing+plugin+load+time) guidelines.
+
+---
+
+## 9. Build, Testing & Deployment
+
+Follow standard procedures for developing, building, and releasing your plugin.
+
+-   **Development Workflow:** Use `npm run dev`. Consult the [Development Workflow](mdc:https:/docs.obsidian.md/Plugins/Getting+started/Development+workflow) guide.
+-   **Local Testing:** Follow the steps in [Build a plugin](mdc:https:/docs.obsidian.md/Plugins/Getting+started/Build+a+plugin) to test locally. **Crucially, test Pinata integration thoroughly with valid and invalid credentials/scenarios.**
+-   **Production Build:** Use `npm run build`.
+-   **Releasing:** Adhere strictly to [Plugin guidelines](mdc:https:/docs.obsidian.md/Plugins/Releasing/Plugin+guidelines) and [Submission requirements](mdc:https:/docs.obsidian.md/Plugins/Releasing/Submission+requirements+for+plugins). Consider [Beta-testing](mdc:https:/docs.obsidian.md/Plugins/Releasing/Beta-testing+plugins). Follow the process to [Submit your plugin](mdc:https:/docs.obsidian.md/Plugins/Releasing/Submit+your+plugin).
+-   **Mobile Compatibility:** Test Pinata interactions on mobile if applicable. See [Mobile Development](mdc:https:/docs.obsidian.md/Plugins/Getting+started/Mobile+development).
+
+---
+
+## 10. Additional Resources
+-   **Pinata LLM Docs:** @https://ai-docs.pinata.cloud (Primary resource for this integration)
+-   **Pinata Private IPFS Docs:** [https://docs.pinata.cloud/files/private-ipfs](mdc:https:/docs.pinata.cloud/files/private-ipfs) 
+-   **Obsidian Sample Plugin:** [obsidianmd/obsidian-sample-plugin](mdc:https:/github.com/obsidianmd/obsidian-sample-plugin)
+-   **Obsidian Developer Documentation:** [docs.obsidian.md/Plugins](mdc:https:/docs.obsidian.md/Plugins)
+
+---

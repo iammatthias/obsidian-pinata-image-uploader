@@ -1,0 +1,13 @@
+{
+	"id": "obsidian-pinata-image-uploader",
+	"name": "Pinata IPFS Image Uploader",
+	"version": "1.0.0",
+	"minAppVersion": "1.4.0",
+	"description": "Upload images to IPFS via Pinata, with support for private IPFS and image optimization.",
+	"author": "iammatthias",
+	"authorUrl": "https://github.com/iammatthias",
+	"isDesktopOnly": false,
+	"fundingUrl": {
+		"GitHub": "https://github.com/sponsors/iammatthias"
+	}
+}
