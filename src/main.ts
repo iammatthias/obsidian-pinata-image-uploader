@@ -19,6 +19,8 @@ import {
 	TFolder,
 	MarkdownPostProcessorContext,
 	MarkdownView,
+	TextComponent,
+	SuggestModal,
 } from "obsidian";
 import {
 	EditorView,
@@ -79,6 +81,42 @@ const DEFAULT_SETTINGS: PinataSettings = {
 // #endregion
 
 // #region Modal UI
+
+/**
+ * Folder suggestion component for selecting folders in the vault
+ */
+class FolderSuggest extends SuggestModal<TFolder> {
+	plugin: PinataImageUploaderPlugin;
+	onSelect: (folder: TFolder) => void;
+
+	constructor(
+		plugin: PinataImageUploaderPlugin,
+		onSelect: (folder: TFolder) => void
+	) {
+		super(plugin.app);
+		this.plugin = plugin;
+		this.onSelect = onSelect;
+	}
+
+	getSuggestions(): TFolder[] {
+		const folders: TFolder[] = [];
+		const files = this.app.vault.getAllLoadedFiles();
+		files.forEach((file) => {
+			if (file instanceof TFolder) {
+				folders.push(file);
+			}
+		});
+		return folders;
+	}
+
+	renderSuggestion(folder: TFolder, el: HTMLElement) {
+		el.createEl("div", { text: folder.path || "/" });
+	}
+
+	onChooseSuggestion(folder: TFolder) {
+		this.onSelect(folder);
+	}
+}
 
 /**
  * Modal dialog for Pinata IPFS commands
@@ -170,6 +208,46 @@ class CommandsModal extends Modal {
 						}
 					})
 			);
+
+		// Select and process specific folder
+		new Setting(contentEl)
+			.setName("Select folder to process")
+			.setDesc(
+				"Choose a specific folder to process all its markdown files and subfolders"
+			)
+			.addButton((btn) => {
+				btn.setButtonText("Select Folder")
+					.setCta()
+					.onClick(() => {
+						new FolderSuggest(
+							this.plugin,
+							async (folder: TFolder) => {
+								try {
+									new Notice(
+										`Processing folder '${
+											folder.path || "/"
+										}'...`
+									);
+									await this.plugin.processFolder(folder);
+									new Notice(
+										`Successfully processed folder '${
+											folder.path || "/"
+										}'`
+									);
+									this.close();
+								} catch (error) {
+									new Notice(
+										`Failed to process folder: ${
+											error instanceof Error
+												? error.message
+												: String(error)
+										}`
+									);
+								}
+							}
+						).open();
+					});
+			});
 
 		// Process all files
 		new Setting(contentEl)
@@ -1509,25 +1587,43 @@ export default class PinataImageUploaderPlugin extends Plugin {
 	async processFolder(folder: TFolder) {
 		try {
 			const files = folder.children;
-			const markdownFiles = files.filter(
-				(file): file is TFile =>
-					file instanceof TFile && file.extension === "md"
-			);
+			const markdownFiles: TFile[] = [];
+			const subFolders: TFolder[] = [];
 
-			if (!markdownFiles.length) {
-				new Notice(`No markdown files found in '${folder.name}'`);
-				return;
+			// Separate files and folders
+			files.forEach((file) => {
+				if (file instanceof TFile && file.extension === "md") {
+					markdownFiles.push(file);
+				} else if (file instanceof TFolder) {
+					subFolders.push(file);
+				}
+			});
+
+			// Process current folder's markdown files
+			if (markdownFiles.length > 0) {
+				new Notice(
+					`Processing ${markdownFiles.length} files in '${
+						folder.path || "/"
+					}'...`
+				);
+				for (const file of markdownFiles) {
+					await this.processFile(file);
+				}
 			}
 
-			new Notice(
-				`Processing ${markdownFiles.length} files in '${folder.name}'...`
-			);
-			for (const file of markdownFiles) {
-				await this.processFile(file);
+			// Recursively process subfolders
+			for (const subFolder of subFolders) {
+				await this.processFolder(subFolder);
 			}
-			new Notice(`Finished processing folder '${folder.name}'`);
+
+			if (folder.parent) {
+				// Only show completion notice for subfolders
+				new Notice(
+					`Finished processing folder '${folder.path || "/"}'`
+				);
+			}
 		} catch (error) {
-			new Notice(`Failed to process folder '${folder.name}'`);
+			new Notice(`Failed to process folder '${folder.path || "/"}'`);
 			console.error(error);
 		}
 	}
