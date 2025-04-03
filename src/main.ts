@@ -6,7 +6,18 @@ import {
 	Setting,
 	TFile,
 	TFolder,
+	MarkdownPostProcessorContext,
 } from "obsidian";
+import {
+	EditorView,
+	ViewUpdate,
+	ViewPlugin,
+	Decoration,
+	DecorationSet,
+	WidgetType,
+	PluginValue,
+} from "@codemirror/view";
+import { RangeSetBuilder } from "@codemirror/state";
 import { PinataSettingTab } from "./settings";
 
 interface PinataSettings {
@@ -167,85 +178,92 @@ class CommandsModal extends Modal {
 	}
 }
 
-class SettingTab extends Modal {
-	plugin: PinataImageUploaderPlugin;
-
-	constructor(plugin: PinataImageUploaderPlugin) {
-		super(plugin.app);
-		this.plugin = plugin;
+class IpfsImageWidget extends WidgetType {
+	constructor(
+		private readonly ipfsHash: string,
+		private readonly alt: string,
+		private readonly plugin: PinataImageUploaderPlugin
+	) {
+		super();
 	}
 
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.empty();
-		contentEl.createEl("h2", { text: "Pinata IPFS Settings" });
-
-		new Setting(contentEl)
-			.setName("Pinata JWT")
-			.setDesc("Your Pinata JWT token")
-			.addText((text) =>
-				text
-					.setPlaceholder("Enter your JWT")
-					.setValue(this.plugin.settings.pinataJwt)
-					.onChange(async (value) => {
-						this.plugin.settings.pinataJwt = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(contentEl)
-			.setName("Gateway URL")
-			.setDesc("Custom gateway URL (optional)")
-			.addText((text) =>
-				text
-					.setPlaceholder("gateway.pinata.cloud")
-					.setValue(this.plugin.settings.pinataGateway || "")
-					.onChange(async (value) => {
-						this.plugin.settings.pinataGateway = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(contentEl)
-			.setName("Private Uploads")
-			.setDesc("Upload images as private pins")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.isPrivate)
-					.onChange(async (value) => {
-						this.plugin.settings.isPrivate = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(contentEl)
-			.setName("Auto-upload on Paste")
-			.setDesc("Automatically upload images when pasted")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.autoUploadPaste)
-					.onChange(async (value) => {
-						this.plugin.settings.autoUploadPaste = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(contentEl)
-			.setName("Auto-upload on Drop")
-			.setDesc("Automatically upload images when dropped")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.autoUploadDrag)
-					.onChange(async (value) => {
-						this.plugin.settings.autoUploadDrag = value;
-						await this.plugin.saveSettings();
-					})
-			);
+	eq(other: IpfsImageWidget): boolean {
+		return other.ipfsHash === this.ipfsHash && other.alt === this.alt;
 	}
 
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
+	toDOM() {
+		const container = document.createElement("span");
+		container.className = "ipfs-image-container";
+
+		const img = document.createElement("img");
+		img.alt = this.alt;
+		img.className = "ipfs-image";
+
+		this.plugin
+			.constructIpfsUrl(this.ipfsHash)
+			.then((url: string) => {
+				img.src = url;
+				if (this.plugin.settings.isPrivate) {
+					img.setAttribute("data-pinata-private", "true");
+					img.setAttribute("data-ipfs-hash", this.ipfsHash);
+				}
+			})
+			.catch((error: Error) => {
+				console.error("Failed to load IPFS image:", error);
+				container.textContent = "⚠️ IPFS image";
+				container.className = "ipfs-image-error";
+			});
+
+		container.appendChild(img);
+		return container;
+	}
+}
+
+class IpfsImagePlugin implements PluginValue {
+	decorations: DecorationSet;
+
+	constructor(
+		private readonly view: EditorView,
+		private readonly plugin: PinataImageUploaderPlugin
+	) {
+		this.decorations = this.buildDecorations();
+	}
+
+	destroy() {}
+
+	update(update: ViewUpdate) {
+		if (
+			update.docChanged ||
+			update.viewportChanged ||
+			update.selectionSet
+		) {
+			this.decorations = this.buildDecorations();
+		}
+	}
+
+	private buildDecorations(): DecorationSet {
+		const builder = new RangeSetBuilder<Decoration>();
+		const docText = this.view.state.doc.toString();
+		const ipfsRegex = /!\[([^\]]*)\]\(ipfs:\/\/([^)]+)\)/g;
+
+		let match;
+		while ((match = ipfsRegex.exec(docText)) !== null) {
+			const [fullMatch, alt, ipfsHash] = match;
+			const from = match.index;
+			const to = from + fullMatch.length;
+
+			// Create a wrapper span that will contain both the widget and prevent default rendering
+			const decorationWidget = Decoration.replace({
+				widget: new IpfsImageWidget(ipfsHash, alt, this.plugin),
+				block: false,
+				inclusive: true,
+				side: 1,
+			});
+
+			builder.add(from, to, decorationWidget);
+		}
+
+		return builder.finish();
 	}
 }
 
@@ -258,62 +276,121 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		// Add settings tab
 		this.addSettingTab(new PinataSettingTab(this.app, this));
 
-		this.addRibbonIcon("image-up", "Pinata IPFS Commands", () => {
-			new CommandsModal(this).open();
-		});
+		// Store plugin instance for the ViewPlugin
+		const pluginInstance = this;
 
-		// Register protocol handler for IPFS URLs
-		this.registerMarkdownPostProcessor((element, context) => {
-			const images = Array.from(element.querySelectorAll("img"));
-			for (const img of images) {
-				const src = img.getAttribute("src");
-				if (!src?.startsWith("ipfs://")) continue;
+		// Register the editor extension using ViewPlugin
+		this.registerEditorExtension([
+			ViewPlugin.fromClass(
+				class {
+					constructor(public view: EditorView) {
+						this.updateIpfsImages();
+					}
 
-				// Extract IPFS hash
-				const ipfsHash = src.replace("ipfs://", "");
+					update(update: ViewUpdate) {
+						if (update.docChanged || update.viewportChanged) {
+							this.updateIpfsImages();
+						}
+					}
 
-				// Check if image is private based on alt text
-				const isPrivate = img.alt === "private";
-
-				// Create a placeholder URL until we can load the real one
-				img.setAttribute(
-					"src",
-					"data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iI2YwZjBmMCIvPjx0ZXh0IHg9IjUwIiB5PSI1MCIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjEyIiBmaWxsPSIjNjY2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSI+TG9hZGluZy4uLjwvdGV4dD48L3N2Zz4="
-				);
-
-				// Store IPFS data for reference
-				img.setAttribute("data-ipfs-hash", ipfsHash);
-				if (isPrivate) {
-					img.setAttribute("data-pinata-private", "true");
+					async updateIpfsImages() {
+						const imgs = this.view.dom.querySelectorAll("img");
+						for (const img of Array.from(imgs)) {
+							const src = img.getAttribute("src");
+							if (src && src.startsWith("ipfs://")) {
+								const ipfsHash = src.substring(
+									"ipfs://".length
+								);
+								try {
+									const signedUrl =
+										await pluginInstance.constructIpfsUrl(
+											ipfsHash
+										);
+									// Only update if different
+									if (img.src !== signedUrl) {
+										img.src = signedUrl;
+									}
+								} catch (error) {
+									console.error(
+										"Failed to update IPFS image",
+										error
+									);
+									img.classList.add("ipfs-image-error");
+									img.setAttribute(
+										"alt",
+										"⚠️ Failed to load IPFS image"
+									);
+								}
+							}
+						}
+					}
 				}
+			),
+		]);
 
-				// Load the actual image
-				this.constructIpfsUrl(ipfsHash)
-					.then((gatewayUrl) => {
-						img.setAttribute("src", gatewayUrl);
-					})
-					.catch((error) => {
-						console.error("Failed to load IPFS image:", error);
-						img.classList.add("ipfs-load-error");
-					});
+		// Add styles for IPFS images
+		const style = document.createElement("style");
+		style.textContent = `
+			.ipfs-image-error {
+				display: inline-block;
+				color: var(--text-error);
+				font-size: 0.9em;
+				padding: 2px 4px;
+				border-radius: 4px;
+				background-color: var(--background-modifier-error);
 			}
-		});
+		`;
+		document.head.appendChild(style);
+
+		// Register markdown post processor for reading view
+		this.registerMarkdownPostProcessor(
+			async (
+				element: HTMLElement,
+				context: MarkdownPostProcessorContext
+			) => {
+				const images = Array.from(
+					element.querySelectorAll<HTMLImageElement>("img")
+				);
+				for (const img of images) {
+					const src = img.src;
+					if (!src || !src.startsWith("ipfs://")) continue;
+
+					const ipfsHash = src.substring("ipfs://".length);
+					try {
+						const gatewayUrl = await this.constructIpfsUrl(
+							ipfsHash
+						);
+						img.src = gatewayUrl;
+						if (this.settings.isPrivate) {
+							img.setAttribute("data-pinata-private", "true");
+							img.setAttribute("data-ipfs-hash", ipfsHash);
+						}
+					} catch (error) {
+						console.error("Failed to process IPFS image:", error);
+						img.classList.add("ipfs-image-error");
+						img.setAttribute("alt", "⚠️ Failed to load IPFS image");
+					}
+				}
+			}
+		);
 
 		// Register interval to refresh private URLs periodically
 		this.registerInterval(
 			window.setInterval(() => {
 				const privateImages = Array.from(
-					document.querySelectorAll('img[data-pinata-private="true"]')
+					document.querySelectorAll<HTMLImageElement>(
+						'img[data-pinata-private="true"]'
+					)
 				);
 				for (const img of privateImages) {
 					const ipfsHash = img.getAttribute("data-ipfs-hash");
 					if (!ipfsHash) continue;
 
 					this.constructIpfsUrl(ipfsHash)
-						.then((gatewayUrl) => {
+						.then((gatewayUrl: string) => {
 							img.setAttribute("src", gatewayUrl);
 						})
-						.catch((error) => {
+						.catch((error: Error) => {
 							console.error(
 								"Failed to refresh private URL:",
 								error
@@ -323,8 +400,17 @@ export default class PinataImageUploaderPlugin extends Plugin {
 			}, 1000 * 60 * 30) // Refresh every 30 minutes
 		);
 
+		// Add commands and handlers
+		this.addRibbonIcon("image-up", "Pinata IPFS Commands", () => {
+			new CommandsModal(this).open();
+		});
+
 		this.addCommands();
 		this.registerHandlers();
+	}
+
+	async onunload() {
+		// Cleanup will be handled by Obsidian's plugin system
 	}
 
 	private addCommands() {
@@ -385,7 +471,7 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
-	private async constructIpfsUrl(ipfsHash: string): Promise<string> {
+	public async constructIpfsUrl(ipfsHash: string): Promise<string> {
 		const gateway =
 			this.settings.pinataGateway?.trim() || "gateway.pinata.cloud";
 		const cleanGateway = gateway.replace(/^https?:\/\//, "");
