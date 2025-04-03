@@ -1,3 +1,14 @@
+/**
+ * Obsidian Pinata IPFS Image Uploader Plugin
+ *
+ * This plugin enables automatic uploading of images to IPFS via Pinata's service.
+ * It supports both local and remote images, with features for private storage,
+ * image optimization, and automatic processing of embedded images.
+ *
+ * @author iammatthias
+ * @license MIT
+ */
+
 import {
 	Editor,
 	Modal,
@@ -20,6 +31,11 @@ import {
 import { RangeSetBuilder } from "@codemirror/state";
 import { PinataSettingTab } from "./settings";
 
+// #region Types and Interfaces
+
+/**
+ * Plugin settings interface defining all configurable options
+ */
 interface PinataSettings {
 	pinataJwt: string;
 	pinataGateway: string;
@@ -38,6 +54,9 @@ interface PinataSettings {
 	backupFolder: string;
 }
 
+/**
+ * Default settings configuration
+ */
 const DEFAULT_SETTINGS: PinataSettings = {
 	pinataJwt: "",
 	pinataGateway: "gateway.pinata.cloud",
@@ -56,6 +75,14 @@ const DEFAULT_SETTINGS: PinataSettings = {
 	backupFolder: ".image_backup",
 };
 
+// #endregion
+
+// #region Modal UI
+
+/**
+ * Modal dialog for Pinata IPFS commands
+ * Provides interface for batch processing images
+ */
 class CommandsModal extends Modal {
 	plugin: PinataImageUploaderPlugin;
 
@@ -108,7 +135,7 @@ class CommandsModal extends Modal {
 		new Setting(contentEl)
 			.setName("Process current folder")
 			.setDesc(
-				"Upload all images (local and remote) in markdown files within the current folder"
+				"Upload all images in markdown files within the current folder"
 			)
 			.addButton((btn) =>
 				btn
@@ -146,9 +173,7 @@ class CommandsModal extends Modal {
 		// Process all files
 		new Setting(contentEl)
 			.setName("Process all files")
-			.setDesc(
-				"Upload all images (local and remote) in all markdown files to IPFS"
-			)
+			.setDesc("Upload all images in all markdown files to IPFS")
 			.addButton((btn) =>
 				btn
 					.setButtonText("Process")
@@ -178,6 +203,14 @@ class CommandsModal extends Modal {
 	}
 }
 
+// #endregion
+
+// #region Editor Integration
+
+/**
+ * Custom widget for rendering IPFS images in the editor
+ * Handles both public and private images with proper URL construction
+ */
 class IpfsImageWidget extends WidgetType {
 	constructor(
 		private readonly ipfsHash: string,
@@ -219,6 +252,9 @@ class IpfsImageWidget extends WidgetType {
 	}
 }
 
+/**
+ * CodeMirror plugin for handling IPFS image decorations in the editor
+ */
 class IpfsImagePlugin implements PluginValue {
 	decorations: DecorationSet;
 
@@ -252,7 +288,6 @@ class IpfsImagePlugin implements PluginValue {
 			const from = match.index;
 			const to = from + fullMatch.length;
 
-			// Create a wrapper span that will contain both the widget and prevent default rendering
 			const decorationWidget = Decoration.replace({
 				widget: new IpfsImageWidget(ipfsHash, alt, this.plugin),
 				block: false,
@@ -267,6 +302,11 @@ class IpfsImagePlugin implements PluginValue {
 	}
 }
 
+// #endregion
+
+/**
+ * Main plugin class implementing the Pinata IPFS image uploader functionality
+ */
 export default class PinataImageUploaderPlugin extends Plugin {
 	settings: PinataSettings;
 
@@ -279,7 +319,7 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		// Store plugin instance for the ViewPlugin
 		const pluginInstance = this;
 
-		// Register the editor extension using ViewPlugin
+		// Register the editor extension for IPFS image preview
 		this.registerEditorExtension([
 			ViewPlugin.fromClass(
 				class {
@@ -374,7 +414,7 @@ export default class PinataImageUploaderPlugin extends Plugin {
 			}
 		);
 
-		// Register interval to refresh private URLs periodically
+		// Register interval to refresh private URLs periodically (every 30 minutes)
 		this.registerInterval(
 			window.setInterval(() => {
 				const privateImages = Array.from(
@@ -397,7 +437,7 @@ export default class PinataImageUploaderPlugin extends Plugin {
 							);
 						});
 				}
-			}, 1000 * 60 * 30) // Refresh every 30 minutes
+			}, 1000 * 60 * 30)
 		);
 
 		// Add commands and handlers
@@ -410,9 +450,14 @@ export default class PinataImageUploaderPlugin extends Plugin {
 	}
 
 	async onunload() {
-		// Cleanup will be handled by Obsidian's plugin system
+		// Cleanup handled by Obsidian's plugin system
 	}
 
+	// #region Command and Event Registration
+
+	/**
+	 * Registers plugin commands in Obsidian's command palette
+	 */
 	private addCommands() {
 		this.addCommand({
 			id: "show-pinata-commands",
@@ -442,6 +487,9 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		});
 	}
 
+	/**
+	 * Registers event handlers for paste and drop events
+	 */
 	private registerHandlers() {
 		if (this.settings.autoUploadPaste) {
 			this.registerEvent(
@@ -459,6 +507,10 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		}
 	}
 
+	// #endregion
+
+	// #region Settings Management
+
 	async loadSettings() {
 		this.settings = Object.assign(
 			{},
@@ -471,6 +523,15 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
+	// #endregion
+
+	// #region URL Construction and Image Processing
+
+	/**
+	 * Constructs a gateway URL for an IPFS hash, handling both public and private files
+	 * @param ipfsHash - The IPFS hash to create a URL for
+	 * @returns Promise<string> - The constructed gateway URL
+	 */
 	public async constructIpfsUrl(ipfsHash: string): Promise<string> {
 		const gateway =
 			this.settings.pinataGateway?.trim() || "gateway.pinata.cloud";
@@ -539,7 +600,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 					const error = await signedResponse
 						.json()
 						.catch(() => ({ message: signedResponse.statusText }));
-					console.error("Signed URL Response:", error); // Debug log
 					throw new Error(
 						`Failed to get signed URL: ${
 							error.error ||
@@ -550,7 +610,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 				}
 
 				const { data: signedUrl } = await signedResponse.json();
-				console.log("Signed URL:", signedUrl); // Debug log
 				url = signedUrl;
 			} catch (error) {
 				console.error("Failed to get signed URL:", error);
@@ -565,6 +624,13 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		return url;
 	}
 
+	// #region Event Handlers
+
+	/**
+	 * Handles paste events for automatic image upload
+	 * @param evt - The clipboard event
+	 * @param editor - The active editor instance
+	 */
 	private async handlePaste(evt: ClipboardEvent, editor: Editor) {
 		if (!evt.clipboardData?.types.some((type) => type.startsWith("image/")))
 			return;
@@ -578,7 +644,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 
 					const url = await this.handleImageUpload(blob);
 					const cursor = editor.getCursor();
-					// Insert the URL directly, not wrapped in image markdown
 					editor.replaceRange(url, cursor);
 				}
 			}
@@ -591,6 +656,11 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Handles drop events for automatic image upload
+	 * @param evt - The drag event
+	 * @param editor - The active editor instance
+	 */
 	private async handleDrop(evt: DragEvent, editor: Editor) {
 		const files = evt.dataTransfer?.files;
 		if (!files?.length) return;
@@ -606,7 +676,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 			for (const file of imageFiles) {
 				const url = await this.handleImageUpload(file);
 				const cursor = editor.getCursor();
-				// Insert the URL directly, not wrapped in image markdown
 				editor.replaceRange(url, cursor);
 			}
 		} catch (error) {
@@ -618,6 +687,15 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		}
 	}
 
+	// #endregion
+
+	// #region Image Upload and Processing
+
+	/**
+	 * Handles the upload of an image file to IPFS
+	 * @param file - The image file to upload (can be TFile, File, or Blob)
+	 * @returns Promise<string> - The markdown-formatted IPFS URL
+	 */
 	private async handleImageUpload(
 		file: TFile | File | Blob
 	): Promise<string> {
@@ -640,7 +718,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 				await this.backupImage(file);
 			}
 
-			// Return the complete markdown syntax
 			return this.settings.isPrivate
 				? `![private](ipfs://${ipfsHash})`
 				: `![](ipfs://${ipfsHash})`;
@@ -655,6 +732,10 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Creates a backup of the original image file
+	 * @param file - The image file to backup
+	 */
 	private async backupImage(file: TFile): Promise<void> {
 		try {
 			const backupFolder =
@@ -663,7 +744,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 				.replace(/\/+/g, "/")
 				.replace(/^\//, "");
 
-			// Create backup folder if it doesn't exist
 			if (!(await this.app.vault.adapter.exists(folderPath))) {
 				await this.app.vault.createFolder(folderPath);
 			}
@@ -681,6 +761,12 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Uploads a file to Pinata's IPFS service
+	 * @param buffer - The file content as ArrayBuffer
+	 * @param fileName - The name of the file
+	 * @returns Promise<string> - The IPFS hash of the uploaded file
+	 */
 	private async uploadToPinata(
 		buffer: ArrayBuffer,
 		fileName: string
@@ -694,147 +780,174 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		const file = new File([blob], fileName);
 
 		if (this.settings.isPrivate) {
-			try {
-				// Get signed upload URL
-				const signedUrlResponse = await fetch(
-					"https://uploads.pinata.cloud/v3/files/sign",
-					{
-						method: "POST",
-						headers: {
-							Authorization: `Bearer ${this.settings.pinataJwt}`,
-							"Content-Type": "application/json",
-						},
-						body: JSON.stringify({
-							date: Math.floor(Date.now() / 1000),
-							expires: 3600, // URL valid for 1 hour
-							filename: fileName,
-							keyvalues: {
-								isPrivate: "true",
-							},
-						}),
-					}
-				);
-
-				if (!signedUrlResponse.ok) {
-					const error = await signedUrlResponse.json().catch(() => ({
-						message: signedUrlResponse.statusText,
-					}));
-					throw new Error(
-						`Failed to get signed upload URL: ${
-							error.error ||
-							error.message ||
-							signedUrlResponse.statusText
-						}`
-					);
-				}
-
-				const { data: signedUrl } = await signedUrlResponse.json();
-
-				// Upload file using signed URL
-				formData.append("file", file);
-				const uploadResponse = await fetch(signedUrl, {
-					method: "POST",
-					body: formData,
-				});
-
-				if (!uploadResponse.ok) {
-					const error = await uploadResponse
-						.json()
-						.catch(() => ({ message: uploadResponse.statusText }));
-					throw new Error(
-						`Upload failed: ${
-							error.error ||
-							error.message ||
-							uploadResponse.statusText
-						}`
-					);
-				}
-
-				const data = await uploadResponse.json();
-				console.log("Private upload response:", data); // Debug log
-
-				// For private uploads, the CID is in data.data.cid
-				if (!data?.data?.cid) {
-					throw new Error(
-						"Upload failed - no CID returned in response"
-					);
-				}
-
-				return data.data.cid;
-			} catch (error) {
-				console.error("Upload error:", error);
-				throw new Error(
-					`Error uploading private file: ${
-						error instanceof Error ? error.message : String(error)
-					}`
-				);
-			}
+			return await this.uploadPrivateFile(file, fileName);
 		} else {
-			// Regular public upload
-			formData.append("file", file);
-
-			// Add metadata for public files
-			const options = {
-				pinataMetadata: {
-					name: fileName,
-					keyvalues: {
-						isPrivate: "false",
-					},
-				},
-				pinataOptions: {
-					cidVersion: 1,
-				},
-			};
-
-			formData.append(
-				"pinataOptions",
-				JSON.stringify(options.pinataOptions)
-			);
-			formData.append(
-				"pinataMetadata",
-				JSON.stringify(options.pinataMetadata)
-			);
-
-			try {
-				const response = await fetch(
-					"https://api.pinata.cloud/pinning/pinFileToIPFS",
-					{
-						method: "POST",
-						headers: {
-							Authorization: `Bearer ${this.settings.pinataJwt}`,
-						},
-						body: formData,
-					}
-				);
-
-				if (!response.ok) {
-					const error = await response
-						.json()
-						.catch(() => ({ message: response.statusText }));
-					throw new Error(
-						`Upload failed: ${
-							error.error || error.message || response.statusText
-						}`
-					);
-				}
-
-				const data = await response.json();
-				if (!data.IpfsHash) {
-					throw new Error("Upload failed - no IPFS hash returned");
-				}
-
-				return data.IpfsHash;
-			} catch (error) {
-				console.error("Upload error:", error);
-				throw new Error(
-					`Error uploading public file: ${
-						error instanceof Error ? error.message : String(error)
-					}`
-				);
-			}
+			return await this.uploadPublicFile(file, fileName);
 		}
 	}
 
+	/**
+	 * Uploads a file to Pinata's private storage
+	 * @param file - The file to upload
+	 * @param fileName - The name of the file
+	 * @returns Promise<string> - The IPFS hash of the uploaded file
+	 */
+	private async uploadPrivateFile(
+		file: File,
+		fileName: string
+	): Promise<string> {
+		try {
+			// Get signed upload URL
+			const signedUrlResponse = await fetch(
+				"https://uploads.pinata.cloud/v3/files/sign",
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${this.settings.pinataJwt}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						date: Math.floor(Date.now() / 1000),
+						expires: 3600, // URL valid for 1 hour
+						filename: fileName,
+						keyvalues: {
+							isPrivate: "true",
+						},
+					}),
+				}
+			);
+
+			if (!signedUrlResponse.ok) {
+				const error = await signedUrlResponse.json().catch(() => ({
+					message: signedUrlResponse.statusText,
+				}));
+				throw new Error(
+					`Failed to get signed upload URL: ${
+						error.error ||
+						error.message ||
+						signedUrlResponse.statusText
+					}`
+				);
+			}
+
+			const { data: signedUrl } = await signedUrlResponse.json();
+
+			// Upload file using signed URL
+			const formData = new FormData();
+			formData.append("file", file);
+			const uploadResponse = await fetch(signedUrl, {
+				method: "POST",
+				body: formData,
+			});
+
+			if (!uploadResponse.ok) {
+				const error = await uploadResponse
+					.json()
+					.catch(() => ({ message: uploadResponse.statusText }));
+				throw new Error(
+					`Upload failed: ${
+						error.error ||
+						error.message ||
+						uploadResponse.statusText
+					}`
+				);
+			}
+
+			const data = await uploadResponse.json();
+			if (!data?.data?.cid) {
+				throw new Error("Upload failed - no CID returned in response");
+			}
+
+			return data.data.cid;
+		} catch (error) {
+			console.error("Upload error:", error);
+			throw new Error(
+				`Error uploading private file: ${
+					error instanceof Error ? error.message : String(error)
+				}`
+			);
+		}
+	}
+
+	/**
+	 * Uploads a file to Pinata's public storage
+	 * @param file - The file to upload
+	 * @param fileName - The name of the file
+	 * @returns Promise<string> - The IPFS hash of the uploaded file
+	 */
+	private async uploadPublicFile(
+		file: File,
+		fileName: string
+	): Promise<string> {
+		const formData = new FormData();
+		formData.append("file", file);
+
+		const options = {
+			pinataMetadata: {
+				name: fileName,
+				keyvalues: {
+					isPrivate: "false",
+				},
+			},
+			pinataOptions: {
+				cidVersion: 1,
+			},
+		};
+
+		formData.append("pinataOptions", JSON.stringify(options.pinataOptions));
+		formData.append(
+			"pinataMetadata",
+			JSON.stringify(options.pinataMetadata)
+		);
+
+		try {
+			const response = await fetch(
+				"https://api.pinata.cloud/pinning/pinFileToIPFS",
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${this.settings.pinataJwt}`,
+					},
+					body: formData,
+				}
+			);
+
+			if (!response.ok) {
+				const error = await response
+					.json()
+					.catch(() => ({ message: response.statusText }));
+				throw new Error(
+					`Upload failed: ${
+						error.error || error.message || response.statusText
+					}`
+				);
+			}
+
+			const data = await response.json();
+			if (!data.IpfsHash) {
+				throw new Error("Upload failed - no IPFS hash returned");
+			}
+
+			return data.IpfsHash;
+		} catch (error) {
+			console.error("Upload error:", error);
+			throw new Error(
+				`Error uploading public file: ${
+					error instanceof Error ? error.message : String(error)
+				}`
+			);
+		}
+	}
+
+	// #endregion
+
+	// #region Utility Methods
+
+	/**
+	 * Downloads an image from a remote URL
+	 * @param url - The URL to download from
+	 * @returns Promise<Blob> - The downloaded image as a Blob
+	 */
 	private async downloadRemoteImage(url: string): Promise<Blob> {
 		try {
 			const response = await fetch(url);
@@ -850,6 +963,11 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Checks if a URL is a remote URL
+	 * @param url - The URL to check
+	 * @returns boolean - True if the URL is remote
+	 */
 	private isRemoteUrl(url: string): boolean {
 		try {
 			new URL(url);
@@ -859,6 +977,11 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Extracts the original URL from various CDN and optimization service URLs
+	 * @param url - The URL to process
+	 * @returns string - The original URL
+	 */
 	private extractOriginalUrl(url: string): string {
 		try {
 			const parsedUrl = new URL(url);
@@ -868,16 +991,13 @@ export default class PinataImageUploaderPlugin extends Plugin {
 
 			// Image optimization and CDN services
 			switch (hostname) {
-				// wsrv.nl (images.weserv.nl)
 				case "wsrv.nl":
 				case "images.weserv.nl":
 					const weservUrl = searchParams.get("url");
 					if (weservUrl) return weservUrl;
 					break;
 
-				// Cloudinary
 				case "res.cloudinary.com":
-					// Format: https://res.cloudinary.com/[cloud_name]/image/[delivery_type]/[transformations]/[version]/[public_id].[extension]
 					const cloudinaryParts = pathname.split("/");
 					if (cloudinaryParts.length > 4) {
 						const cloudName = cloudinaryParts[1];
@@ -887,88 +1007,60 @@ export default class PinataImageUploaderPlugin extends Plugin {
 					}
 					break;
 
-				// Imgix
 				case hostname.match(/.*\.imgix\.net$/)?.input:
-					// Remove transformation parameters
-					return `${parsedUrl.origin}${pathname}`;
-
-				// ImageKit
 				case hostname.match(/.*\.imagekit\.io$/)?.input:
-					// Remove transformation parameters
-					return `${parsedUrl.origin}${pathname}`;
-
-				// Akamai Image Manager
 				case hostname.match(/.*\.akamaized\.net$/)?.input:
-					return `${parsedUrl.origin}${pathname}`;
-
-				// Fastly Image Optimizer
 				case hostname.match(/.*\.fastly\.net$/)?.input:
-					return `${parsedUrl.origin}${pathname}`;
-
-				// Bunny.net Image CDN
 				case hostname.match(/.*\.b-cdn\.net$/)?.input:
-					return `${parsedUrl.origin}${pathname}`;
-
-				// KeyCDN Image Processing
 				case hostname.match(/.*\.kxcdn\.com$/)?.input:
+				case hostname.match(/.*\.cloudfront\.net$/)?.input:
 					return `${parsedUrl.origin}${pathname}`;
 
-				// WordPress.com Photon
 				case "i0.wp.com":
 				case "i1.wp.com":
 				case "i2.wp.com":
 				case "i3.wp.com":
-					const wpcomUrl = pathname.substring(1); // Remove leading slash
+					const wpcomUrl = pathname.substring(1);
 					if (wpcomUrl.startsWith("http")) {
 						return wpcomUrl;
 					}
 					break;
 
-				// Amazon CloudFront
-				case hostname.match(/.*\.cloudfront\.net$/)?.input:
-					return `${parsedUrl.origin}${pathname}`;
-
-				// Firebase Storage
 				case "firebasestorage.googleapis.com":
 					return url;
 
-				// Shopify CDN
 				case hostname.match(/.*\.shopify\.com$/)?.input:
-					// Remove image transformations
 					const shopifyPath = pathname.replace(
 						/_(small|medium|large|grande|original|[0-9]+x[0-9]+|pico|icon|thumb|compact|master)\./,
 						"."
 					);
 					return `${parsedUrl.origin}${shopifyPath}`;
 
-				// Contentful Images
 				case "images.ctfassets.net":
-					return `${parsedUrl.origin}${pathname}`;
-
-				// Sirv
 				case hostname.match(/.*\.sirv\.com$/)?.input:
 					return `${parsedUrl.origin}${pathname}`;
 
-				// Uploadcare
 				case "ucarecdn.com":
-					// Remove transformation parameters
 					const uploadcarePath = pathname.split("/-/")[0];
 					return `${parsedUrl.origin}${uploadcarePath}`;
 
-				// Vercel Image Optimization
 				case hostname.match(/.*\.vercel\.app$/)?.input:
 					const vercelUrl = searchParams.get("url");
 					if (vercelUrl) return vercelUrl;
 					break;
 			}
 
-			// If no specific CDN pattern is matched, return the original URL
 			return url;
 		} catch {
 			return url;
 		}
 	}
 
+	/**
+	 * Checks if a hostname matches known CDN patterns
+	 * @param hostname - The hostname to check
+	 * @returns boolean - True if the hostname is a known CDN
+	 */
 	private isKnownCdnDomain(hostname: string): boolean {
 		const cdnPatterns = [
 			/\.cloudfront\.net$/,
@@ -993,20 +1085,73 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		return cdnPatterns.some((pattern) => pattern.test(hostname));
 	}
 
+	/**
+	 * Gets the file extension from a URL
+	 * @param url - The URL to process
+	 * @returns string - The file extension
+	 */
+	private getFileExtFromUrl(url: string): string {
+		try {
+			const pathname = new URL(url).pathname;
+			const ext = pathname.split(".").pop()?.toLowerCase();
+			return ext && ["jpg", "jpeg", "png", "gif", "webp"].includes(ext)
+				? ext
+				: "jpg";
+		} catch {
+			return "jpg";
+		}
+	}
+
+	/**
+	 * Checks if a URL points to an image
+	 * @param url - The URL to check
+	 * @returns boolean - True if the URL is an image
+	 */
+	private isImageUrl(url: string): boolean {
+		const imageExtensions = [
+			".jpg",
+			".jpeg",
+			".png",
+			".gif",
+			".webp",
+			".bmp",
+			".tiff",
+			".svg",
+		];
+		const lowercaseUrl = url.toLowerCase();
+		return imageExtensions.some((ext) => lowercaseUrl.endsWith(ext));
+	}
+
+	/**
+	 * Escapes special characters in a string for use in a regular expression
+	 * @param string - The string to escape
+	 * @returns string - The escaped string
+	 */
+	private escapeRegExp(string: string): string {
+		return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	}
+
+	// #endregion
+
+	// #region Batch Processing
+
+	/**
+	 * Processes all images in a single markdown file
+	 * @param file - The markdown file to process
+	 */
 	async processFile(file: TFile) {
 		try {
 			const content = await this.app.vault.read(file);
 			const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
 			let newContent = content;
 			let modified = false;
-			let processedUrls = new Map<string, string>(); // Track original URLs to their IPFS replacements
+			let processedUrls = new Map<string, string>();
 
 			for (const match of content.matchAll(imageRegex)) {
 				try {
 					const [fullMatch, alt, imagePath] = match;
 					const decodedPath = decodeURIComponent(imagePath);
 
-					// Check if we've already processed this URL in this file
 					if (processedUrls.has(decodedPath)) {
 						newContent = newContent.replace(
 							fullMatch,
@@ -1016,7 +1161,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 						continue;
 					}
 
-					// Skip if already on IPFS or Pinata
 					if (
 						decodedPath.includes("ipfs://") ||
 						decodedPath.includes("pinata.cloud")
@@ -1025,13 +1169,11 @@ export default class PinataImageUploaderPlugin extends Plugin {
 					}
 
 					if (this.isRemoteUrl(decodedPath)) {
-						// Handle remote image
 						const originalUrl =
 							this.extractOriginalUrl(decodedPath);
 
 						try {
 							const parsedUrl = new URL(decodedPath);
-							// Only process if it's a known CDN or if the URL points directly to an image
 							if (
 								this.isKnownCdnDomain(parsedUrl.hostname) ||
 								this.isImageUrl(decodedPath)
@@ -1045,10 +1187,8 @@ export default class PinataImageUploaderPlugin extends Plugin {
 									imageBlob
 								);
 
-								// Store the processed URL
 								processedUrls.set(decodedPath, url);
 
-								// Replace all instances of this image in the document
 								const imageRegexEscaped = new RegExp(
 									`!\\[([^\\]]*)\\]\\(${this.escapeRegExp(
 										imagePath
@@ -1075,7 +1215,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 							);
 						}
 					} else {
-						// Handle local image
 						const imageFile =
 							this.app.metadataCache.getFirstLinkpathDest(
 								decodedPath,
@@ -1088,10 +1227,8 @@ export default class PinataImageUploaderPlugin extends Plugin {
 									imageFile
 								);
 
-								// Store the processed URL
 								processedUrls.set(decodedPath, url);
 
-								// Replace all instances of this image in the document
 								const imageRegexEscaped = new RegExp(
 									`!\\[([^\\]]*)\\]\\(${this.escapeRegExp(
 										imagePath
@@ -1147,38 +1284,10 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		}
 	}
 
-	private getFileExtFromUrl(url: string): string {
-		try {
-			const pathname = new URL(url).pathname;
-			const ext = pathname.split(".").pop()?.toLowerCase();
-			return ext && ["jpg", "jpeg", "png", "gif", "webp"].includes(ext)
-				? ext
-				: "jpg";
-		} catch {
-			return "jpg";
-		}
-	}
-
-	private isImageUrl(url: string): boolean {
-		// Check if the URL ends with a common image extension
-		const imageExtensions = [
-			".jpg",
-			".jpeg",
-			".png",
-			".gif",
-			".webp",
-			".bmp",
-			".tiff",
-			".svg",
-		];
-		const lowercaseUrl = url.toLowerCase();
-		return imageExtensions.some((ext) => lowercaseUrl.endsWith(ext));
-	}
-
-	private escapeRegExp(string: string): string {
-		return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	}
-
+	/**
+	 * Processes all markdown files in a folder
+	 * @param folder - The folder to process
+	 */
 	async processFolder(folder: TFolder) {
 		try {
 			const files = folder.children;
@@ -1205,6 +1314,9 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Processes all markdown files in the vault
+	 */
 	async processAllFiles() {
 		try {
 			const files = this.app.vault.getMarkdownFiles();
@@ -1223,4 +1335,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 			console.error(error);
 		}
 	}
+
+	// #endregion
 }
