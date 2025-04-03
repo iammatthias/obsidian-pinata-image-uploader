@@ -444,9 +444,23 @@ class IpfsImagePlugin implements PluginValue {
  */
 export default class PinataImageUploaderPlugin extends Plugin {
 	settings: PinataSettings;
+	private statusBarItem: HTMLElement;
+	private processingStats = {
+		totalFiles: 0,
+		processedFiles: 0,
+		totalImages: 0,
+		processedImages: 0,
+		currentFileImages: 0,
+		currentFileProcessedImages: 0,
+		currentFileName: "",
+	};
 
 	async onload() {
 		await this.loadSettings();
+
+		// Initialize status bar
+		this.statusBarItem = this.addStatusBarItem();
+		this.statusBarItem.style.display = "none"; // Hide initially
 
 		// Add settings tab
 		this.addSettingTab(new PinataSettingTab(this.app, this));
@@ -1236,25 +1250,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 					break;
 				}
 
-				// Vercel Image Optimization
-				case /\.vercel\.app$/.test(hostname): {
-					for (const param of ["url", "src", "image"]) {
-						const originalUrl = searchParams.get(param);
-						if (originalUrl) {
-							extractedUrl = originalUrl;
-							break;
-						}
-					}
-					break;
-				}
-
-				// Uploadcare
-				case /^ucarecdn\.com$/.test(hostname): {
-					const uploadcarePath = pathname.split("/-/")[0];
-					extractedUrl = `${parsedUrl.origin}${uploadcarePath}`;
-					break;
-				}
-
 				// Firebase Storage
 				case /^firebasestorage\.googleapis\.com$/.test(hostname): {
 					extractedUrl = url;
@@ -1262,11 +1257,10 @@ export default class PinataImageUploaderPlugin extends Plugin {
 				}
 
 				// Generic CDN patterns with query parameter stripping
-				case /\.(imgix\.net|imagekit\.io|akamaized\.net|fastly\.net|b-cdn\.net|kxcdn\.com|cloudfront\.net)$/.test(
+				case /\.(akamaized\.net|fastly\.net|cloudfront\.net)$/.test(
 					hostname
 				):
-				case /^images\.ctfassets\.net$/.test(hostname):
-				case /\.sirv\.com$/.test(hostname): {
+				case /^images\.ctfassets\.net$/.test(hostname): {
 					const cleanParams = new URLSearchParams();
 					for (const [key, value] of searchParams.entries()) {
 						if (!this.isOptimizationParam(key)) {
@@ -1294,20 +1288,18 @@ export default class PinataImageUploaderPlugin extends Plugin {
 					return extractedUrl;
 				} catch (error) {
 					console.warn(
-						`Invalid extracted URL: ${extractedUrl}, falling back to original URL`
-					);
-					new Notice(
-						`Failed to process CDN URL: ${url}. Using original URL.`
+						`Invalid extracted URL: ${extractedUrl}, using current URL as fallback`
 					);
 					return url;
 				}
 			}
 
+			// If we couldn't extract the original URL, return the current URL
 			return url;
 		} catch (error) {
-			console.warn(`Error extracting original URL from ${url}:`, error);
-			new Notice(
-				`Failed to process CDN URL: ${url}. Using original URL.`
+			console.warn(
+				`Error processing URL ${url}, using as fallback:`,
+				error
 			);
 			return url;
 		}
@@ -1364,18 +1356,11 @@ export default class PinataImageUploaderPlugin extends Plugin {
 			/\.cloudfront\.net$/,
 			/\.akamaized\.net$/,
 			/\.fastly\.net$/,
-			/\.b-cdn\.net$/,
-			/\.kxcdn\.com$/,
-			/\.imgix\.net$/,
-			/\.imagekit\.io$/,
-			/\.sirv\.com$/,
 			/\.shopify\.com$/,
-			/\.vercel\.app$/,
 			/\.cloudinary\.com$/,
 			/images\.weserv\.nl$/,
 			/wsrv\.nl$/,
 			/\.wp\.com$/,
-			/ucarecdn\.com$/,
 			/images\.ctfassets\.net$/,
 			/firebasestorage\.googleapis\.com$/,
 		];
@@ -1434,6 +1419,38 @@ export default class PinataImageUploaderPlugin extends Plugin {
 	// #region Batch Processing
 
 	/**
+	 * Updates the status bar with current processing statistics
+	 */
+	private updateStatusBar() {
+		if (this.processingStats.totalFiles > 0) {
+			this.statusBarItem.style.display = "block";
+			this.statusBarItem.setText(
+				`Processing: ${this.processingStats.processedFiles}/${this.processingStats.totalFiles} files | ` +
+					`Total: ${this.processingStats.processedImages}/${this.processingStats.totalImages} images | ` +
+					`Current file (${this.processingStats.currentFileName}): ${this.processingStats.currentFileProcessedImages}/${this.processingStats.currentFileImages} images`
+			);
+		} else {
+			this.statusBarItem.style.display = "none";
+		}
+	}
+
+	/**
+	 * Resets all processing statistics
+	 */
+	private resetProcessingStats() {
+		this.processingStats = {
+			totalFiles: 0,
+			processedFiles: 0,
+			totalImages: 0,
+			processedImages: 0,
+			currentFileImages: 0,
+			currentFileProcessedImages: 0,
+			currentFileName: "",
+		};
+		this.updateStatusBar();
+	}
+
+	/**
 	 * Processes all images in a single markdown file
 	 * @param file - The markdown file to process
 	 */
@@ -1444,6 +1461,14 @@ export default class PinataImageUploaderPlugin extends Plugin {
 			let newContent = content;
 			let modified = false;
 			let processedUrls = new Map<string, string>();
+
+			// Count total images in current file
+			this.processingStats.currentFileName = file.name;
+			this.processingStats.currentFileImages = Array.from(
+				content.matchAll(imageRegex)
+			).length;
+			this.processingStats.currentFileProcessedImages = 0;
+			this.updateStatusBar();
 
 			for (const match of content.matchAll(imageRegex)) {
 				try {
@@ -1456,6 +1481,9 @@ export default class PinataImageUploaderPlugin extends Plugin {
 							processedUrls.get(decodedPath) || ""
 						);
 						modified = true;
+						this.processingStats.currentFileProcessedImages++;
+						this.processingStats.processedImages++;
+						this.updateStatusBar();
 						continue;
 					}
 
@@ -1463,6 +1491,9 @@ export default class PinataImageUploaderPlugin extends Plugin {
 						decodedPath.includes("ipfs://") ||
 						decodedPath.includes("pinata.cloud")
 					) {
+						this.processingStats.currentFileProcessedImages++;
+						this.processingStats.processedImages++;
+						this.updateStatusBar();
 						continue;
 					}
 
@@ -1495,6 +1526,10 @@ export default class PinataImageUploaderPlugin extends Plugin {
 									markdown
 								);
 								modified = true;
+								this.processingStats
+									.currentFileProcessedImages++;
+								this.processingStats.processedImages++;
+								this.updateStatusBar();
 							}
 						} catch (error) {
 							console.error(
@@ -1508,6 +1543,9 @@ export default class PinataImageUploaderPlugin extends Plugin {
 										: String(error)
 								}`
 							);
+							this.processingStats.currentFileProcessedImages++;
+							this.processingStats.processedImages++;
+							this.updateStatusBar();
 							continue;
 						}
 					} else {
@@ -1539,6 +1577,11 @@ export default class PinataImageUploaderPlugin extends Plugin {
 								if (this.settings.backupOriginalImages) {
 									await this.backupImage(imageFile);
 								}
+
+								this.processingStats
+									.currentFileProcessedImages++;
+								this.processingStats.processedImages++;
+								this.updateStatusBar();
 							} catch (error) {
 								console.error(
 									`Failed to process local image: ${decodedPath}`,
@@ -1551,6 +1594,10 @@ export default class PinataImageUploaderPlugin extends Plugin {
 											: String(error)
 									}`
 								);
+								this.processingStats
+									.currentFileProcessedImages++;
+								this.processingStats.processedImages++;
+								this.updateStatusBar();
 							}
 						}
 					}
@@ -1566,17 +1613,25 @@ export default class PinataImageUploaderPlugin extends Plugin {
 								: String(error)
 						}`
 					);
+					this.processingStats.currentFileProcessedImages++;
+					this.processingStats.processedImages++;
+					this.updateStatusBar();
 					continue;
 				}
 			}
 
 			if (modified) {
 				await this.app.vault.modify(file, newContent);
-				new Notice(`Updated images in ${file.name}`);
 			}
+
+			this.processingStats.processedFiles++;
+			this.updateStatusBar();
+			new Notice(`Updated images in ${file.name}`);
 		} catch (error) {
 			new Notice(`Failed to process ${file.name}`);
 			console.error(error);
+			this.processingStats.processedFiles++;
+			this.updateStatusBar();
 		}
 	}
 
@@ -1601,11 +1656,27 @@ export default class PinataImageUploaderPlugin extends Plugin {
 
 			// Process current folder's markdown files
 			if (markdownFiles.length > 0) {
+				// Initialize processing stats for this folder
+				this.processingStats.totalFiles += markdownFiles.length;
+
+				// Count total images in all files
+				for (const file of markdownFiles) {
+					const content = await this.app.vault.read(file);
+					const imageMatches = content.match(
+						/!\[([^\]]*)\]\(([^)]+)\)/g
+					);
+					this.processingStats.totalImages += imageMatches
+						? imageMatches.length
+						: 0;
+				}
+
+				this.updateStatusBar();
 				new Notice(
 					`Processing ${markdownFiles.length} files in '${
 						folder.path || "/"
 					}'...`
 				);
+
 				for (const file of markdownFiles) {
 					await this.processFile(file);
 				}
@@ -1639,14 +1710,32 @@ export default class PinataImageUploaderPlugin extends Plugin {
 				return;
 			}
 
+			// Reset and initialize processing stats
+			this.resetProcessingStats();
+			this.processingStats.totalFiles = files.length;
+
+			// Count total images in all files
+			for (const file of files) {
+				const content = await this.app.vault.read(file);
+				const imageMatches = content.match(/!\[([^\]]*)\]\(([^)]+)\)/g);
+				this.processingStats.totalImages += imageMatches
+					? imageMatches.length
+					: 0;
+			}
+
+			this.updateStatusBar();
 			new Notice(`Processing ${files.length} files...`);
+
 			for (const file of files) {
 				await this.processFile(file);
 			}
+
 			new Notice("Finished processing all files");
+			this.resetProcessingStats(); // Clear the status bar after completion
 		} catch (error) {
 			new Notice("Failed to process all files");
 			console.error(error);
+			this.resetProcessingStats(); // Clear the status bar on error
 		}
 	}
 

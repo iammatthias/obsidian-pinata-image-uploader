@@ -1,89 +1,35 @@
 # Obsidian Pinata IPFS Image Uploader
 
-A plugin for [Obsidian](https://obsidian.md) that uploads embedded images to [Pinata](https://pinata.cloud). The plugin replaces both local and remote image references in markdown with `ipfs://` uris, and handles gateway proxying for image display.
+A plugin for [Obsidian](https://obsidian.md) that uploads embedded images to [Pinata](https://pinata.cloud). The plugin replaces both local and remote image references in markdown with `ipfs://` URIs, and handles gateway proxying for image display.
 
 ## Prerequisites
 
--   **Pinata Account**: This plugin requires a Pinata account to function.
-    -   [Sign up for Pinata](https://app.pinata.cloud/register)
+**Pinata Account**: This plugin requires a Pinata account to function. - [Sign up for Pinata](https://app.pinata.cloud/register)
 
 ## Features
 
 ### Core Features
 
--   🔒 Support for both public and private IPFS storage with JWT authentication
+-   🔒 Support for both public and private IPFS storage on Pinata
 -   🖼️ Image optimization options via Pinata's gateway parameters
 -   📎 Auto-upload on paste and drag & drop
 -   💾 Optional local backup of original images
 -   🔄 Batch processing for existing images (single file, folder, or entire vault)
--   🌐 Smart handling of remote images from popular CDNs
--   📝 Clean markdown with `ipfs://` links
+-   🌐 Support for processing remote images
+-   📝 Clean markdown with `ipfs://` URIs
 -   🔄 Automatic URL refresh for private files (every 30 minutes)
 -   🎨 Live preview support in editor
 
 ### Technical Features
 
--   🎯 Smart CDN detection and URL normalization for:
-    -   Cloudinary
-        -   Handles both upload and fetch delivery types
-        -   Preserves full asset paths including folders
-        -   Intelligent transformation detection:
-            -   Width and version parameters
-            -   Format and crop settings
-            -   Effects and quality adjustments
-            -   Aspect ratio and color adjustments
-    -   WordPress.com
-        -   Supports i[0-3].wp.com and \*.files.wordpress.com
-        -   Handles direct URLs and size variants
-    -   Shopify
-        -   Comprehensive size variant handling:
-            -   Standard sizes (small, medium, large, etc.)
-            -   Retina variants (@2x, @3x)
-            -   Custom dimensions with height modifiers
-            -   Progressive and versioned images
-        -   Supports compound transformations
-        -   Handles crop and position parameters
-    -   Image Optimization Services
-        -   Images.weserv.nl (with URL extraction)
-        -   Imgix (with parameter cleaning)
-        -   ImageKit (with parameter cleaning)
-        -   Vercel Image Optimization (multiple URL parameters)
-    -   Enterprise CDNs
-        -   Akamai
-        -   Fastly
-        -   CloudFront
-        -   BunnyCDN
-        -   KeyCDN
-    -   Specialized Services
-        -   Firebase Storage (direct URLs)
-        -   Contentful (images.ctfassets.net)
-        -   Sirv
-        -   Uploadcare (transformation removal)
-    -   Common Optimizations Handled
-        -   Dimension parameters (width, height, fit)
-        -   Quality and format settings
-        -   Cropping and focal points
-        -   Effects (blur, sharp, etc.)
-        -   Progressive loading
-        -   DPR/Device pixel ratio
--   🛡️ Error handling and reporting:
-    -   Graceful fallbacks
-    -   Detailed error notifications
-    -   Comprehensive error logging
--   📦 Advanced file handling:
-    -   Automatic file type detection
-    -   Smart extension handling with fallbacks
-    -   Duplicate upload prevention
-    -   Binary file processing
--   🔍 URL processing:
-    -   Intelligent URL parsing and normalization
-    -   CDN-specific optimization parameter stripping
-    -   Automatic handling of encoded URLs
-    -   Smart path resolution
--   💾 Performance optimizations:
-    -   URL caching to prevent duplicate uploads
-    -   Batch processing for files and folders
-    -   Efficient binary file handling
+-   🎯 Smart handling of remote images
+    -   For best results, use direct image URLs in your markdown
+        -   This will require manually trigging the upload through the Ribbon icon or Command Palette
+    -   Copy/paste or drag and drop images directly when possible for new images
+-   🛡️ Error handling and reporting
+-   📦 Efficient file processing and management
+-   🔍 Intelligent URL processing and normalization
+-   💾 Performance optimizations with caching
 
 ## Installation
 
@@ -178,30 +124,24 @@ Access via ribbon icon or command palette:
 
 ### Automatic Upload Methods
 
-#### Paste Upload
+#### Paste Upload (Recommended)
 
 1. Copy an image to clipboard
 2. Paste directly into note (Cmd/Ctrl + V)
 3. Image uploads automatically if enabled
 
-#### Drag and Drop Upload
+#### Drag and Drop Upload (Recommended)
 
 1. Drag image file into note
 2. Image uploads automatically if enabled
 
 ### Remote Image Handling
 
-The plugin can process remote images from various sources:
+The plugin can process remote images from various sources. For best results:
 
--   Popular CDNs (Cloudinary, Imgix, etc.)
--   WordPress media
--   General image URLs
-
-Remote images are:
-
-1. Downloaded
-2. Uploaded to IPFS
-3. Replaced with IPFS links
+1. Use direct image URLs when possible
+2. Copy/paste or drag and drop the original image when available
+3. Some CDN and optimized image URLs will be automatically processed
 
 ### Image Link Format
 
@@ -245,12 +185,6 @@ npm install
 ```bash
 npm run build
 ```
-
-### Development Commands
-
--   `npm run dev` - Development build with hot reload
--   `npm run build` - Production build
--   `npm run clean` - Clean build directory
 
 ## Support
 
