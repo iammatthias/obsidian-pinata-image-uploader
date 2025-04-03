@@ -13,7 +13,6 @@ A plugin for [Obsidian](https://obsidian.md) that uploads embedded images to [Pi
 -   🔒 Support for both public and private IPFS storage on Pinata
 -   🖼️ Image optimization options via Pinata's gateway parameters
 -   📎 Auto-upload on paste and drag & drop
--   💾 Optional local backup of original images
 -   🔄 Batch processing for existing images (single file, folder, or entire vault)
 -   🌐 Support for processing remote images
 -   📝 Clean markdown with `ipfs://` URIs
