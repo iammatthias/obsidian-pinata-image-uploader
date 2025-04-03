@@ -29,8 +29,6 @@ export interface PinataSettings {
 	};
 	autoUploadPaste: boolean;
 	autoUploadDrag: boolean;
-	backupOriginalImages: boolean;
-	backupFolder: string;
 }
 
 export type ImageFormat = "auto" | "jpeg" | "png" | "webp" | "gif";
@@ -101,6 +99,4 @@ export const DEFAULT_SETTINGS: PinataSettings = {
 	},
 	autoUploadPaste: true,
 	autoUploadDrag: true,
-	backupOriginalImages: true,
-	backupFolder: ".image_backup",
 };

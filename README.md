@@ -90,8 +90,6 @@ A plugin for [Obsidian](https://obsidian.md) that uploads embedded images to [Pi
 
 -   **Auto-upload on Paste**: Automatically upload images when pasted
 -   **Auto-upload on Drag**: Automatically upload images when dragged into notes
--   **Backup Original Images**: Keep local copies of uploaded images
-    -   **Backup Folder**: Specify where to store backups (default: `.image_backup`)
 
 #### Image Optimization
 

@@ -16,8 +16,6 @@ export const DEFAULT_SETTINGS: PinataSettings = {
 	},
 	autoUploadPaste: true,
 	autoUploadDrag: true,
-	backupOriginalImages: true,
-	backupFolder: ".image_backup",
 };
 
 export class PinataSettingTab extends PluginSettingTab {
@@ -110,35 +108,6 @@ export class PinataSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.autoUploadDrag)
 					.onChange(async (value) => {
 						this.plugin.settings.autoUploadDrag = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		// Backup Configuration Section
-		containerEl.createEl("h2", { text: "Backup Configuration" });
-
-		new Setting(containerEl)
-			.setName("Backup Original Images")
-			.setDesc("Keep a local backup of uploaded images")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.backupOriginalImages)
-					.onChange(async (value) => {
-						this.plugin.settings.backupOriginalImages = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Backup Folder")
-			.setDesc("Folder to store image backups (relative to vault root)")
-			.addText((text) =>
-				text
-					.setPlaceholder(".image_backup")
-					.setValue(this.plugin.settings.backupFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.backupFolder =
-							value || ".image_backup";
 						await this.plugin.saveSettings();
 					})
 			);

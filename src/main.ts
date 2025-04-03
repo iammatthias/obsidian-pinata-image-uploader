@@ -894,10 +894,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 
 			const ipfsHash = await this.uploadToPinata(buffer, fileName);
 
-			if (this.settings.backupOriginalImages && file instanceof TFile) {
-				await this.backupImage(file);
-			}
-
 			return this.createIpfsMarkdown(ipfsHash);
 		} catch (error) {
 			console.error(
@@ -907,35 +903,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 				error
 			);
 			throw error;
-		}
-	}
-
-	/**
-	 * Creates a backup of the original image file
-	 * @param file - The image file to backup
-	 */
-	private async backupImage(file: TFile): Promise<void> {
-		try {
-			const backupFolder =
-				this.settings.backupFolder.trim() || ".image_backup";
-			const folderPath = `${backupFolder}/${file.parent?.path || ""}`
-				.replace(/\/+/g, "/")
-				.replace(/^\//, "");
-
-			if (!(await this.app.vault.adapter.exists(folderPath))) {
-				await this.app.vault.createFolder(folderPath);
-			}
-
-			const backupPath = `${folderPath}/${file.name}`;
-			const content = await this.app.vault.readBinary(file);
-			await this.app.vault.createBinary(backupPath, content);
-		} catch (error) {
-			console.error(`Failed to backup image ${file.path}:`, error);
-			new Notice(
-				`Failed to backup image: ${
-					error instanceof Error ? error.message : String(error)
-				}`
-			);
 		}
 	}
 
@@ -1573,10 +1540,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 									markdown
 								);
 								modified = true;
-
-								if (this.settings.backupOriginalImages) {
-									await this.backupImage(imageFile);
-								}
 
 								this.processingStats
 									.currentFileProcessedImages++;
