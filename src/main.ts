@@ -18,6 +18,7 @@ import {
 	TFile,
 	TFolder,
 	MarkdownPostProcessorContext,
+	MarkdownView,
 } from "obsidian";
 import {
 	EditorView,
@@ -220,8 +221,12 @@ class IpfsImageWidget extends WidgetType {
 		super();
 	}
 
-	eq(other: IpfsImageWidget): boolean {
-		return other.ipfsHash === this.ipfsHash && other.alt === this.alt;
+	eq(other: WidgetType): boolean {
+		return (
+			other instanceof IpfsImageWidget &&
+			other.ipfsHash === this.ipfsHash &&
+			other.alt === this.alt
+		);
 	}
 
 	toDOM() {
@@ -231,21 +236,25 @@ class IpfsImageWidget extends WidgetType {
 		const img = document.createElement("img");
 		img.alt = this.alt;
 		img.className = "ipfs-image";
+		img.style.opacity = "0";
+		img.style.transition = "opacity 0.3s ease-in-out";
+		img.setAttribute("data-ipfs-hash", this.ipfsHash);
 
-		this.plugin
-			.constructIpfsUrl(this.ipfsHash)
-			.then((url: string) => {
-				img.src = url;
-				if (this.plugin.settings.isPrivate) {
-					img.setAttribute("data-pinata-private", "true");
-					img.setAttribute("data-ipfs-hash", this.ipfsHash);
-				}
-			})
-			.catch((error: Error) => {
-				console.error("Failed to load IPFS image:", error);
-				container.textContent = "⚠️ IPFS image";
-				container.className = "ipfs-image-error";
-			});
+		// Add loading placeholder
+		const placeholder = document.createElement("div");
+		placeholder.className = "ipfs-image-placeholder";
+		placeholder.innerHTML = `<div class="ipfs-image-loading">Loading IPFS image...</div>`;
+		container.appendChild(placeholder);
+
+		img.onload = () => {
+			img.style.opacity = "1";
+			placeholder.style.display = "none";
+		};
+
+		img.onerror = () => {
+			img.classList.add("ipfs-image-error");
+			placeholder.innerHTML = `<div class="ipfs-image-error">⚠️ Failed to load IPFS image</div>`;
+		};
 
 		container.appendChild(img);
 		return container;
@@ -257,23 +266,71 @@ class IpfsImageWidget extends WidgetType {
  */
 class IpfsImagePlugin implements PluginValue {
 	decorations: DecorationSet;
+	observer: IntersectionObserver;
 
 	constructor(
 		private readonly view: EditorView,
 		private readonly plugin: PinataImageUploaderPlugin
 	) {
 		this.decorations = this.buildDecorations();
+
+		// Create intersection observer for lazy loading
+		this.observer = new IntersectionObserver(
+			(entries) => {
+				entries.forEach((entry) => {
+					if (entry.isIntersecting) {
+						const img = entry.target;
+						if (!(img instanceof HTMLImageElement)) return;
+
+						const ipfsHash = img.getAttribute("data-ipfs-hash");
+						if (ipfsHash && !img.getAttribute("src")) {
+							this.plugin
+								.constructIpfsUrl(ipfsHash)
+								.then((url) => {
+									img.src = url;
+								})
+								.catch((error) => {
+									console.error(
+										"Failed to load IPFS image:",
+										error
+									);
+									img.classList.add("ipfs-image-error");
+									img.setAttribute(
+										"alt",
+										"⚠️ Failed to load IPFS image"
+									);
+								});
+						}
+					}
+				});
+			},
+			{
+				root: this.view.scrollDOM,
+				rootMargin: "50px",
+				threshold: 0.1,
+			}
+		);
 	}
 
-	destroy() {}
+	destroy() {
+		this.observer.disconnect();
+	}
 
 	update(update: ViewUpdate) {
-		if (
-			update.docChanged ||
-			update.viewportChanged ||
-			update.selectionSet
-		) {
+		if (update.docChanged || update.viewportChanged) {
 			this.decorations = this.buildDecorations();
+
+			// Update observer for all images
+			requestAnimationFrame(() => {
+				const images = this.view.dom.querySelectorAll<HTMLImageElement>(
+					"img[data-ipfs-hash]"
+				);
+				images.forEach((img) => {
+					if (!img.getAttribute("src")) {
+						this.observer.observe(img);
+					}
+				});
+			});
 		}
 	}
 
@@ -316,10 +373,70 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		// Add settings tab
 		this.addSettingTab(new PinataSettingTab(this.app, this));
 
-		// Store plugin instance for the ViewPlugin
-		const pluginInstance = this;
+		// Register paste handler if enabled
+		if (this.settings.autoUploadPaste) {
+			this.registerEvent(
+				this.app.workspace.on(
+					"editor-paste",
+					async (evt: ClipboardEvent, editor: Editor) => {
+						// Check if clipboard has image data
+						if (
+							!evt.clipboardData?.types.some(
+								(type) =>
+									type === "Files" ||
+									type.startsWith("image/")
+							)
+						) {
+							return;
+						}
 
-		// Register the editor extension for IPFS image preview
+						const files = Array.from(evt.clipboardData.files);
+						const imageFiles = files.filter((file) =>
+							file.type.startsWith("image/")
+						);
+
+						if (imageFiles.length === 0) {
+							return;
+						}
+
+						// Prevent default paste behavior
+						evt.preventDefault();
+						evt.stopPropagation();
+
+						try {
+							for (const file of imageFiles) {
+								const ext = file.type.split("/")[1] || "png";
+								const fileName = `pasted-image-${Date.now()}.${ext}`;
+
+								// Upload to IPFS
+								const buffer = await file.arrayBuffer();
+								const ipfsHash = await this.uploadToPinata(
+									buffer,
+									fileName
+								);
+								const ipfsMarkdown =
+									this.createIpfsMarkdown(ipfsHash);
+
+								// Insert at cursor
+								const cursor = editor.getCursor();
+								editor.replaceRange(ipfsMarkdown, cursor);
+							}
+						} catch (error) {
+							new Notice(
+								`Failed to upload pasted image: ${
+									error instanceof Error
+										? error.message
+										: String(error)
+								}`
+							);
+						}
+					}
+				)
+			);
+		}
+
+		// Register editor extension for live preview
+		const pluginInstance = this;
 		this.registerEditorExtension([
 			ViewPlugin.fromClass(
 				class {
@@ -334,7 +451,10 @@ export default class PinataImageUploaderPlugin extends Plugin {
 					}
 
 					async updateIpfsImages() {
-						const imgs = this.view.dom.querySelectorAll("img");
+						const imgs =
+							this.view.dom.querySelectorAll<HTMLImageElement>(
+								"img"
+							);
 						for (const img of Array.from(imgs)) {
 							const src = img.getAttribute("src");
 							if (src && src.startsWith("ipfs://")) {
@@ -368,32 +488,18 @@ export default class PinataImageUploaderPlugin extends Plugin {
 			),
 		]);
 
-		// Add styles for IPFS images
-		const style = document.createElement("style");
-		style.textContent = `
-			.ipfs-image-error {
-				display: inline-block;
-				color: var(--text-error);
-				font-size: 0.9em;
-				padding: 2px 4px;
-				border-radius: 4px;
-				background-color: var(--background-modifier-error);
-			}
-		`;
-		document.head.appendChild(style);
-
 		// Register markdown post processor for reading view
 		this.registerMarkdownPostProcessor(
 			async (
 				element: HTMLElement,
 				context: MarkdownPostProcessorContext
 			) => {
-				const images = Array.from(
-					element.querySelectorAll<HTMLImageElement>("img")
+				const imgs = element.querySelectorAll<HTMLImageElement>(
+					"img[src^='ipfs://']"
 				);
-				for (const img of images) {
-					const src = img.src;
-					if (!src || !src.startsWith("ipfs://")) continue;
+				for (const img of Array.from(imgs)) {
+					const src = img.getAttribute("src");
+					if (!src) continue;
 
 					const ipfsHash = src.substring("ipfs://".length);
 					try {
@@ -447,6 +553,20 @@ export default class PinataImageUploaderPlugin extends Plugin {
 
 		this.addCommands();
 		this.registerHandlers();
+
+		// Add styles for IPFS images
+		const style = document.createElement("style");
+		style.textContent = `
+			.ipfs-image-error {
+				display: inline-block;
+				color: var(--text-error);
+				font-size: 0.9em;
+				padding: 2px 4px;
+				border-radius: 4px;
+				background-color: var(--background-modifier-error);
+			}
+		`;
+		document.head.appendChild(style);
 	}
 
 	async onunload() {
@@ -491,15 +611,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 	 * Registers event handlers for paste and drop events
 	 */
 	private registerHandlers() {
-		if (this.settings.autoUploadPaste) {
-			this.registerEvent(
-				this.app.workspace.on(
-					"editor-paste",
-					this.handlePaste.bind(this)
-				)
-			);
-		}
-
 		if (this.settings.autoUploadDrag) {
 			this.registerEvent(
 				this.app.workspace.on("editor-drop", this.handleDrop.bind(this))
@@ -627,36 +738,6 @@ export default class PinataImageUploaderPlugin extends Plugin {
 	// #region Event Handlers
 
 	/**
-	 * Handles paste events for automatic image upload
-	 * @param evt - The clipboard event
-	 * @param editor - The active editor instance
-	 */
-	private async handlePaste(evt: ClipboardEvent, editor: Editor) {
-		if (!evt.clipboardData?.types.some((type) => type.startsWith("image/")))
-			return;
-		evt.preventDefault();
-
-		try {
-			for (const item of Array.from(evt.clipboardData.items)) {
-				if (item.type.startsWith("image/")) {
-					const blob = item.getAsFile();
-					if (!blob) continue;
-
-					const url = await this.handleImageUpload(blob);
-					const cursor = editor.getCursor();
-					editor.replaceRange(url, cursor);
-				}
-			}
-		} catch (error) {
-			new Notice(
-				`Failed to upload pasted image: ${
-					error instanceof Error ? error.message : String(error)
-				}`
-			);
-		}
-	}
-
-	/**
 	 * Handles drop events for automatic image upload
 	 * @param evt - The drag event
 	 * @param editor - The active editor instance
@@ -674,9 +755,16 @@ export default class PinataImageUploaderPlugin extends Plugin {
 
 		try {
 			for (const file of imageFiles) {
-				const url = await this.handleImageUpload(file);
+				// Upload directly to IPFS
+				const ipfsHash = await this.uploadToPinata(
+					await file.arrayBuffer(),
+					file.name
+				);
+				const ipfsMarkdown = this.createIpfsMarkdown(ipfsHash);
+
+				// Insert the IPFS markdown at cursor position
 				const cursor = editor.getCursor();
-				editor.replaceRange(url, cursor);
+				editor.replaceRange(ipfsMarkdown, cursor);
 			}
 		} catch (error) {
 			new Notice(
@@ -694,7 +782,7 @@ export default class PinataImageUploaderPlugin extends Plugin {
 	/**
 	 * Handles the upload of an image file to IPFS
 	 * @param file - The image file to upload (can be TFile, File, or Blob)
-	 * @returns Promise<string> - The markdown-formatted IPFS URL
+	 * @returns Promise<string> - The IPFS URI of the uploaded file
 	 */
 	private async handleImageUpload(
 		file: TFile | File | Blob
@@ -718,9 +806,7 @@ export default class PinataImageUploaderPlugin extends Plugin {
 				await this.backupImage(file);
 			}
 
-			return this.settings.isPrivate
-				? `![private](ipfs://${ipfsHash})`
-				: `![](ipfs://${ipfsHash})`;
+			return this.createIpfsMarkdown(ipfsHash);
 		} catch (error) {
 			console.error(
 				`Failed to upload image ${
@@ -944,6 +1030,17 @@ export default class PinataImageUploaderPlugin extends Plugin {
 	// #region Utility Methods
 
 	/**
+	 * Creates a markdown image link for an IPFS hash
+	 * @param ipfsHash - The IPFS hash to create markdown for
+	 * @returns string - The markdown-formatted image link
+	 */
+	private createIpfsMarkdown(ipfsHash: string): string {
+		return this.settings.isPrivate
+			? `![private](ipfs://${ipfsHash})`
+			: `![](ipfs://${ipfsHash})`;
+	}
+
+	/**
 	 * Downloads an image from a remote URL
 	 * @param url - The URL to download from
 	 * @returns Promise<Blob> - The downloaded image as a Blob
@@ -980,80 +1077,203 @@ export default class PinataImageUploaderPlugin extends Plugin {
 	/**
 	 * Extracts the original URL from various CDN and optimization service URLs
 	 * @param url - The URL to process
-	 * @returns string - The original URL
+	 * @returns string - The original URL or the input URL if extraction fails
 	 */
 	private extractOriginalUrl(url: string): string {
 		try {
 			const parsedUrl = new URL(url);
-			const hostname = parsedUrl.hostname;
+			const hostname = parsedUrl.hostname.toLowerCase();
 			const pathname = parsedUrl.pathname;
 			const searchParams = parsedUrl.searchParams;
 
-			// Image optimization and CDN services
-			switch (hostname) {
-				case "wsrv.nl":
-				case "images.weserv.nl":
-					const weservUrl = searchParams.get("url");
-					if (weservUrl) return weservUrl;
-					break;
+			let extractedUrl: string | null = null;
 
-				case "res.cloudinary.com":
+			// Image optimization and CDN services
+			switch (true) {
+				// Images.weserv.nl
+				case /^(wsrv\.nl|images\.weserv\.nl)$/.test(hostname): {
+					extractedUrl = searchParams.get("url");
+					break;
+				}
+
+				// Cloudinary
+				case /^res\.cloudinary\.com$/.test(hostname): {
 					const cloudinaryParts = pathname.split("/");
 					if (cloudinaryParts.length > 4) {
 						const cloudName = cloudinaryParts[1];
-						const publicIdWithExt =
-							cloudinaryParts[cloudinaryParts.length - 1];
-						return `https://res.cloudinary.com/${cloudName}/image/upload/${publicIdWithExt}`;
+						const uploadIndex = cloudinaryParts.findIndex(
+							(part) => part === "upload" || part === "fetch"
+						);
+						if (uploadIndex !== -1) {
+							const remainingParts = cloudinaryParts.slice(
+								uploadIndex + 1
+							);
+							const assetPathStartIndex =
+								remainingParts.findIndex(
+									(part) =>
+										!part.match(/^[vw]_/) &&
+										!part.match(/^[fc]_/) &&
+										!part.match(/^[eq]_/) &&
+										!part.includes(",") &&
+										!part.match(
+											/^(ar_|co_|fl_|l_|o_|r_|u_|x_|y_|z_)/
+										)
+								);
+
+							const assetPath =
+								assetPathStartIndex !== -1
+									? remainingParts
+											.slice(assetPathStartIndex)
+											.join("/")
+									: remainingParts[remainingParts.length - 1];
+
+							extractedUrl = `https://res.cloudinary.com/${cloudName}/${cloudinaryParts[uploadIndex]}/${assetPath}`;
+						}
 					}
 					break;
+				}
 
-				case hostname.match(/.*\.imgix\.net$/)?.input:
-				case hostname.match(/.*\.imagekit\.io$/)?.input:
-				case hostname.match(/.*\.akamaized\.net$/)?.input:
-				case hostname.match(/.*\.fastly\.net$/)?.input:
-				case hostname.match(/.*\.b-cdn\.net$/)?.input:
-				case hostname.match(/.*\.kxcdn\.com$/)?.input:
-				case hostname.match(/.*\.cloudfront\.net$/)?.input:
-					return `${parsedUrl.origin}${pathname}`;
-
-				case "i0.wp.com":
-				case "i1.wp.com":
-				case "i2.wp.com":
-				case "i3.wp.com":
-					const wpcomUrl = pathname.substring(1);
-					if (wpcomUrl.startsWith("http")) {
-						return wpcomUrl;
+				// WordPress.com
+				case /^i[0-3]\.wp\.com$/.test(hostname):
+				case /\.files\.wordpress\.com$/.test(hostname): {
+					if (pathname.startsWith("/http")) {
+						extractedUrl = pathname.substring(1);
+					} else {
+						const wpPath = pathname.replace(/-\d+x\d+\./, ".");
+						extractedUrl = `${parsedUrl.origin}${wpPath}`;
 					}
 					break;
+				}
 
-				case "firebasestorage.googleapis.com":
-					return url;
+				// Shopify
+				case /\.shopify\.com$/.test(hostname): {
+					const shopifyPath = pathname
+						.replace(
+							/_((?:small|medium|large|grande|original|[0-9]+x[0-9]+|pico|icon|thumb|compact|master|progressive|v[0-9]+)(?:_[a-z0-9]+)?)\./,
+							"."
+						)
+						.replace(/@\d+(?:x\d+)?h?(?:_[a-z0-9]+)?\./, ".")
+						.replace(/(_crop_[a-z]+|_position_[a-z]+)\./, ".");
+					extractedUrl = `${parsedUrl.origin}${shopifyPath}`;
+					break;
+				}
 
-				case hostname.match(/.*\.shopify\.com$/)?.input:
-					const shopifyPath = pathname.replace(
-						/_(small|medium|large|grande|original|[0-9]+x[0-9]+|pico|icon|thumb|compact|master)\./,
-						"."
-					);
-					return `${parsedUrl.origin}${shopifyPath}`;
+				// Vercel Image Optimization
+				case /\.vercel\.app$/.test(hostname): {
+					for (const param of ["url", "src", "image"]) {
+						const originalUrl = searchParams.get(param);
+						if (originalUrl) {
+							extractedUrl = originalUrl;
+							break;
+						}
+					}
+					break;
+				}
 
-				case "images.ctfassets.net":
-				case hostname.match(/.*\.sirv\.com$/)?.input:
-					return `${parsedUrl.origin}${pathname}`;
-
-				case "ucarecdn.com":
+				// Uploadcare
+				case /^ucarecdn\.com$/.test(hostname): {
 					const uploadcarePath = pathname.split("/-/")[0];
-					return `${parsedUrl.origin}${uploadcarePath}`;
-
-				case hostname.match(/.*\.vercel\.app$/)?.input:
-					const vercelUrl = searchParams.get("url");
-					if (vercelUrl) return vercelUrl;
+					extractedUrl = `${parsedUrl.origin}${uploadcarePath}`;
 					break;
+				}
+
+				// Firebase Storage
+				case /^firebasestorage\.googleapis\.com$/.test(hostname): {
+					extractedUrl = url;
+					break;
+				}
+
+				// Generic CDN patterns with query parameter stripping
+				case /\.(imgix\.net|imagekit\.io|akamaized\.net|fastly\.net|b-cdn\.net|kxcdn\.com|cloudfront\.net)$/.test(
+					hostname
+				):
+				case /^images\.ctfassets\.net$/.test(hostname):
+				case /\.sirv\.com$/.test(hostname): {
+					const cleanParams = new URLSearchParams();
+					for (const [key, value] of searchParams.entries()) {
+						if (!this.isOptimizationParam(key)) {
+							cleanParams.append(key, value);
+						}
+					}
+
+					const cleanPath = pathname.replace(
+						/-\d+x\d+(\.[^.]+)$/,
+						"$1"
+					);
+					const cleanUrl = new URL(`${parsedUrl.origin}${cleanPath}`);
+					const paramString = cleanParams.toString();
+					extractedUrl = paramString
+						? `${cleanUrl.toString()}?${paramString}`
+						: cleanUrl.toString();
+					break;
+				}
+			}
+
+			// If we successfully extracted a URL, validate it
+			if (extractedUrl) {
+				try {
+					new URL(extractedUrl);
+					return extractedUrl;
+				} catch (error) {
+					console.warn(
+						`Invalid extracted URL: ${extractedUrl}, falling back to original URL`
+					);
+					new Notice(
+						`Failed to process CDN URL: ${url}. Using original URL.`
+					);
+					return url;
+				}
 			}
 
 			return url;
-		} catch {
+		} catch (error) {
+			console.warn(`Error extracting original URL from ${url}:`, error);
+			new Notice(
+				`Failed to process CDN URL: ${url}. Using original URL.`
+			);
 			return url;
 		}
+	}
+
+	/**
+	 * Checks if a URL parameter is related to image optimization
+	 * @param param - The parameter name to check
+	 * @returns boolean - True if the parameter is an optimization parameter
+	 */
+	private isOptimizationParam(param: string): boolean {
+		const optimizationParams = [
+			// Dimensions
+			"w",
+			"width",
+			"h",
+			"height",
+			"fit",
+			"size",
+			// Quality
+			"q",
+			"quality",
+			// Format
+			"fm",
+			"format",
+			// Cropping
+			"crop",
+			"rect",
+			"focal",
+			// Effects
+			"blur",
+			"sharp",
+			"brightness",
+			"contrast",
+			// Progressive loading
+			"progressive",
+			"interlace",
+			// DPR
+			"dpr",
+			"device_pixel_ratio",
+			// Auto
+			"auto",
+		];
+		return optimizationParams.includes(param.toLowerCase());
 	}
 
 	/**
@@ -1155,7 +1375,7 @@ export default class PinataImageUploaderPlugin extends Plugin {
 					if (processedUrls.has(decodedPath)) {
 						newContent = newContent.replace(
 							fullMatch,
-							`![${alt}](${processedUrls.get(decodedPath)})`
+							processedUrls.get(decodedPath) || ""
 						);
 						modified = true;
 						continue;
@@ -1169,35 +1389,32 @@ export default class PinataImageUploaderPlugin extends Plugin {
 					}
 
 					if (this.isRemoteUrl(decodedPath)) {
-						const originalUrl =
-							this.extractOriginalUrl(decodedPath);
-
 						try {
-							const parsedUrl = new URL(decodedPath);
+							const validatedUrl = new URL(decodedPath);
+							const originalUrl = this.extractOriginalUrl(
+								validatedUrl.toString()
+							);
+
 							if (
-								this.isKnownCdnDomain(parsedUrl.hostname) ||
-								this.isImageUrl(decodedPath)
+								this.isKnownCdnDomain(validatedUrl.hostname) ||
+								this.isImageUrl(validatedUrl.toString())
 							) {
 								const imageBlob =
 									await this.downloadRemoteImage(originalUrl);
 								const fileName = `remote-${Date.now()}.${this.getFileExtFromUrl(
 									originalUrl
 								)}`;
-								const url = await this.handleImageUpload(
-									imageBlob
+								const ipfsHash = await this.uploadToPinata(
+									await imageBlob.arrayBuffer(),
+									fileName
 								);
+								const markdown =
+									this.createIpfsMarkdown(ipfsHash);
 
-								processedUrls.set(decodedPath, url);
-
-								const imageRegexEscaped = new RegExp(
-									`!\\[([^\\]]*)\\]\\(${this.escapeRegExp(
-										imagePath
-									)}\\)`,
-									"g"
-								);
+								processedUrls.set(decodedPath, markdown);
 								newContent = newContent.replace(
-									imageRegexEscaped,
-									`![${alt}](${url})`
+									fullMatch,
+									markdown
 								);
 								modified = true;
 							}
@@ -1213,6 +1430,7 @@ export default class PinataImageUploaderPlugin extends Plugin {
 										: String(error)
 								}`
 							);
+							continue;
 						}
 					} else {
 						const imageFile =
@@ -1223,21 +1441,20 @@ export default class PinataImageUploaderPlugin extends Plugin {
 
 						if (imageFile instanceof TFile) {
 							try {
-								const url = await this.handleImageUpload(
+								const buffer = await this.app.vault.readBinary(
 									imageFile
 								);
-
-								processedUrls.set(decodedPath, url);
-
-								const imageRegexEscaped = new RegExp(
-									`!\\[([^\\]]*)\\]\\(${this.escapeRegExp(
-										imagePath
-									)}\\)`,
-									"g"
+								const ipfsHash = await this.uploadToPinata(
+									buffer,
+									imageFile.name
 								);
+								const markdown =
+									this.createIpfsMarkdown(ipfsHash);
+
+								processedUrls.set(decodedPath, markdown);
 								newContent = newContent.replace(
-									imageRegexEscaped,
-									`![${alt}](${url})`
+									fullMatch,
+									markdown
 								);
 								modified = true;
 
@@ -1271,6 +1488,7 @@ export default class PinataImageUploaderPlugin extends Plugin {
 								: String(error)
 						}`
 					);
+					continue;
 				}
 			}
 

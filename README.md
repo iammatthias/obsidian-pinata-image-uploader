@@ -9,6 +9,8 @@ A plugin for [Obsidian](https://obsidian.md) that uploads embedded images to [Pi
 
 ## Features
 
+### Core Features
+
 -   🔒 Support for both public and private IPFS storage with JWT authentication
 -   🖼️ Image optimization options via Pinata's gateway parameters
 -   📎 Auto-upload on paste and drag & drop
@@ -16,8 +18,72 @@ A plugin for [Obsidian](https://obsidian.md) that uploads embedded images to [Pi
 -   🔄 Batch processing for existing images (single file, folder, or entire vault)
 -   🌐 Smart handling of remote images from popular CDNs
 -   📝 Clean markdown with `ipfs://` links
--   🔄 Automatic URL refresh for private files
+-   🔄 Automatic URL refresh for private files (every 30 minutes)
 -   🎨 Live preview support in editor
+
+### Technical Features
+
+-   🎯 Smart CDN detection and URL normalization for:
+    -   Cloudinary
+        -   Handles both upload and fetch delivery types
+        -   Preserves full asset paths including folders
+        -   Intelligent transformation detection:
+            -   Width and version parameters
+            -   Format and crop settings
+            -   Effects and quality adjustments
+            -   Aspect ratio and color adjustments
+    -   WordPress.com
+        -   Supports i[0-3].wp.com and \*.files.wordpress.com
+        -   Handles direct URLs and size variants
+    -   Shopify
+        -   Comprehensive size variant handling:
+            -   Standard sizes (small, medium, large, etc.)
+            -   Retina variants (@2x, @3x)
+            -   Custom dimensions with height modifiers
+            -   Progressive and versioned images
+        -   Supports compound transformations
+        -   Handles crop and position parameters
+    -   Image Optimization Services
+        -   Images.weserv.nl (with URL extraction)
+        -   Imgix (with parameter cleaning)
+        -   ImageKit (with parameter cleaning)
+        -   Vercel Image Optimization (multiple URL parameters)
+    -   Enterprise CDNs
+        -   Akamai
+        -   Fastly
+        -   CloudFront
+        -   BunnyCDN
+        -   KeyCDN
+    -   Specialized Services
+        -   Firebase Storage (direct URLs)
+        -   Contentful (images.ctfassets.net)
+        -   Sirv
+        -   Uploadcare (transformation removal)
+    -   Common Optimizations Handled
+        -   Dimension parameters (width, height, fit)
+        -   Quality and format settings
+        -   Cropping and focal points
+        -   Effects (blur, sharp, etc.)
+        -   Progressive loading
+        -   DPR/Device pixel ratio
+-   🛡️ Error handling and reporting:
+    -   Graceful fallbacks
+    -   Detailed error notifications
+    -   Comprehensive error logging
+-   📦 Advanced file handling:
+    -   Automatic file type detection
+    -   Smart extension handling with fallbacks
+    -   Duplicate upload prevention
+    -   Binary file processing
+-   🔍 URL processing:
+    -   Intelligent URL parsing and normalization
+    -   CDN-specific optimization parameter stripping
+    -   Automatic handling of encoded URLs
+    -   Smart path resolution
+-   💾 Performance optimizations:
+    -   URL caching to prevent duplicate uploads
+    -   Batch processing for files and folders
+    -   Efficient binary file handling
 
 ## Installation
 
