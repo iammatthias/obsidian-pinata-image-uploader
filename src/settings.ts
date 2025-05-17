@@ -1,6 +1,6 @@
 import { App, PluginSettingTab, Setting, Notice } from "obsidian";
-import { PinataSettings, ImageFormat, ImageFit } from "./types";
 import PinataImageUploaderPlugin from "./main";
+import { PinataSettings, ImageFormat, ImageFit } from "./types";
 
 export const DEFAULT_SETTINGS: PinataSettings = {
 	pinataJwt: "",
@@ -16,6 +16,10 @@ export const DEFAULT_SETTINGS: PinataSettings = {
 	},
 	autoUploadPaste: true,
 	autoUploadDrag: true,
+	groups: {
+		enabled: false,
+		name: "Obsidian Images",
+	},
 };
 
 export class PinataSettingTab extends PluginSettingTab {
@@ -226,6 +230,41 @@ export class PinataSettingTab extends PluginSettingTab {
 						.onChange(async (value) => {
 							this.plugin.settings.imageOptimization.fit =
 								value as ImageFit;
+							await this.plugin.saveSettings();
+						})
+				);
+		}
+
+		// Groups Section
+		containerEl.createEl("h2", { text: "Pinata Groups" });
+
+		new Setting(containerEl)
+			.setName("Enable Groups")
+			.setDesc("Organize uploaded images into Pinata groups")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.groups.enabled)
+					.onChange(async (value) => {
+						this.plugin.settings.groups.enabled = value;
+						await this.plugin.saveSettings();
+						this.display();
+					})
+			);
+
+		if (this.plugin.settings.groups.enabled) {
+			new Setting(containerEl)
+				.setName("Group Name")
+				.setDesc("Name of the Pinata group to organize images")
+				.addText((text) =>
+					text
+						.setPlaceholder("Obsidian Images")
+						.setValue(this.plugin.settings.groups.name)
+						.onChange(async (value) => {
+							if (!value.trim()) {
+								new Notice("Group name cannot be empty");
+								return;
+							}
+							this.plugin.settings.groups.name = value.trim();
 							await this.plugin.saveSettings();
 						})
 				);

@@ -18,8 +18,6 @@ import {
 	TFile,
 	TFolder,
 	MarkdownPostProcessorContext,
-	MarkdownView,
-	TextComponent,
 	SuggestModal,
 } from "obsidian";
 import {
@@ -55,6 +53,10 @@ interface PinataSettings {
 	autoUploadDrag: boolean;
 	backupOriginalImages: boolean;
 	backupFolder: string;
+	groups: {
+		enabled: boolean;
+		name: string;
+	};
 }
 
 /**
@@ -76,6 +78,10 @@ const DEFAULT_SETTINGS: PinataSettings = {
 	autoUploadDrag: true,
 	backupOriginalImages: true,
 	backupFolder: ".image_backup",
+	groups: {
+		enabled: false,
+		name: "",
+	},
 };
 
 // #endregion
@@ -338,106 +344,6 @@ class IpfsImageWidget extends WidgetType {
 		return container;
 	}
 }
-
-/**
- * CodeMirror plugin for handling IPFS image decorations in the editor
- */
-class IpfsImagePlugin implements PluginValue {
-	decorations: DecorationSet;
-	observer: IntersectionObserver;
-
-	constructor(
-		private readonly view: EditorView,
-		private readonly plugin: PinataImageUploaderPlugin
-	) {
-		this.decorations = this.buildDecorations();
-
-		// Create intersection observer for lazy loading
-		this.observer = new IntersectionObserver(
-			(entries) => {
-				entries.forEach((entry) => {
-					if (entry.isIntersecting) {
-						const img = entry.target;
-						if (!(img instanceof HTMLImageElement)) return;
-
-						const ipfsHash = img.getAttribute("data-ipfs-hash");
-						if (ipfsHash && !img.getAttribute("src")) {
-							this.plugin
-								.constructIpfsUrl(ipfsHash)
-								.then((url) => {
-									img.src = url;
-								})
-								.catch((error) => {
-									console.error(
-										"Failed to load IPFS image:",
-										error
-									);
-									img.classList.add("ipfs-image-error");
-									img.setAttribute(
-										"alt",
-										"⚠️ Failed to load IPFS image"
-									);
-								});
-						}
-					}
-				});
-			},
-			{
-				root: this.view.scrollDOM,
-				rootMargin: "50px",
-				threshold: 0.1,
-			}
-		);
-	}
-
-	destroy() {
-		this.observer.disconnect();
-	}
-
-	update(update: ViewUpdate) {
-		if (update.docChanged || update.viewportChanged) {
-			this.decorations = this.buildDecorations();
-
-			// Update observer for all images
-			requestAnimationFrame(() => {
-				const images = this.view.dom.querySelectorAll<HTMLImageElement>(
-					"img[data-ipfs-hash]"
-				);
-				images.forEach((img) => {
-					if (!img.getAttribute("src")) {
-						this.observer.observe(img);
-					}
-				});
-			});
-		}
-	}
-
-	private buildDecorations(): DecorationSet {
-		const builder = new RangeSetBuilder<Decoration>();
-		const docText = this.view.state.doc.toString();
-		const ipfsRegex = /!\[([^\]]*)\]\(ipfs:\/\/([^)]+)\)/g;
-
-		let match;
-		while ((match = ipfsRegex.exec(docText)) !== null) {
-			const [fullMatch, alt, ipfsHash] = match;
-			const from = match.index;
-			const to = from + fullMatch.length;
-
-			const decorationWidget = Decoration.replace({
-				widget: new IpfsImageWidget(ipfsHash, alt, this.plugin),
-				block: false,
-				inclusive: true,
-				side: 1,
-			});
-
-			builder.add(from, to, decorationWidget);
-		}
-
-		return builder.finish();
-	}
-}
-
-// #endregion
 
 /**
  * Main plugin class implementing the Pinata IPFS image uploader functionality
@@ -872,37 +778,120 @@ export default class PinataImageUploaderPlugin extends Plugin {
 	// #region Image Upload and Processing
 
 	/**
-	 * Handles the upload of an image file to IPFS
-	 * @param file - The image file to upload (can be TFile, File, or Blob)
-	 * @returns Promise<string> - The IPFS URI of the uploaded file
+	 * Creates or gets a Pinata group
+	 * @param groupName - The name of the group to create or get
+	 * @returns Promise<string> - The group ID
 	 */
-	private async handleImageUpload(
-		file: TFile | File | Blob
-	): Promise<string> {
+	private async getOrCreateGroup(groupName: string): Promise<string> {
+		if (!this.settings.pinataJwt) {
+			throw new Error("Pinata JWT not configured");
+		}
+
 		try {
-			const buffer =
-				file instanceof TFile
-					? await this.app.vault.readBinary(file)
-					: await file.arrayBuffer();
+			console.log("Starting group operation with name:", groupName);
+			console.log("JWT token present:", !!this.settings.pinataJwt);
+			console.log("Groups enabled:", this.settings.groups.enabled);
 
-			const fileName =
-				file instanceof TFile
-					? file.name
-					: file instanceof File
-					? file.name
-					: `image-${Date.now()}.png`;
+			const network = this.settings.isPrivate ? "private" : "public";
+			// First try to find the group using name filter
+			const listUrl = `https://api.pinata.cloud/v3/groups/${network}?name=${encodeURIComponent(
+				groupName
+			)}`;
+			console.log("Listing groups with URL:", listUrl);
 
-			const ipfsHash = await this.uploadToPinata(buffer, fileName);
+			const response = await fetch(listUrl, {
+				method: "GET",
+				headers: {
+					Authorization: `Bearer ${this.settings.pinataJwt}`,
+					"Content-Type": "application/json",
+				},
+			});
 
-			return this.createIpfsMarkdown(ipfsHash);
-		} catch (error) {
-			console.error(
-				`Failed to upload image ${
-					file instanceof TFile ? file.path : "blob"
-				}:`,
-				error
+			console.log("List groups response status:", response.status);
+			const headers: Record<string, string> = {};
+			response.headers.forEach((value, key) => {
+				headers[key] = value;
+			});
+			console.log("List groups response headers:", headers);
+
+			if (!response.ok) {
+				const errorText = await response.text();
+				console.error("List groups error response:", errorText);
+				throw new Error(
+					`Failed to list groups: ${response.statusText} - ${errorText}`
+				);
+			}
+
+			const data = await response.json();
+			console.log(
+				"List groups response data:",
+				JSON.stringify(data, null, 2)
 			);
-			throw error;
+
+			const existingGroup = data.data?.groups?.find(
+				(group: any) => group.name === groupName
+			);
+
+			if (existingGroup) {
+				console.log(
+					"Found existing group:",
+					JSON.stringify(existingGroup, null, 2)
+				);
+				return existingGroup.id;
+			}
+
+			console.log("No existing group found, creating new group...");
+
+			// Create new group if not found
+			const createResponse = await fetch(
+				`https://api.pinata.cloud/v3/groups/${network}`,
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${this.settings.pinataJwt}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						name: groupName,
+						is_public: !this.settings.isPrivate,
+					}),
+				}
+			);
+
+			console.log("Create group response status:", createResponse.status);
+			const createHeaders: Record<string, string> = {};
+			createResponse.headers.forEach((value, key) => {
+				createHeaders[key] = value;
+			});
+			console.log("Create group response headers:", createHeaders);
+
+			if (!createResponse.ok) {
+				const errorText = await createResponse.text();
+				console.error("Create group error response:", errorText);
+				throw new Error(
+					`Failed to create group: ${createResponse.statusText} - ${errorText}`
+				);
+			}
+
+			const createData = await createResponse.json();
+			console.log(
+				"Create group response data:",
+				JSON.stringify(createData, null, 2)
+			);
+
+			if (!createData?.data?.id) {
+				console.error("Invalid group creation response:", createData);
+				throw new Error("Group creation response missing ID");
+			}
+
+			return createData.data.id;
+		} catch (error) {
+			console.error("Group operation error:", error);
+			throw new Error(
+				`Error managing Pinata group: ${
+					error instanceof Error ? error.message : String(error)
+				}`
+			);
 		}
 	}
 
@@ -920,134 +909,49 @@ export default class PinataImageUploaderPlugin extends Plugin {
 			throw new Error("Pinata JWT not configured");
 		}
 
+		console.log("Starting file upload process...");
+		console.log("File name:", fileName);
+		console.log("Groups enabled:", this.settings.groups.enabled);
+		console.log("Group name:", this.settings.groups.name);
+
 		const formData = new FormData();
 		const blob = new Blob([buffer]);
 		const file = new File([blob], fileName);
 
-		if (this.settings.isPrivate) {
-			return await this.uploadPrivateFile(file, fileName);
-		} else {
-			return await this.uploadPublicFile(file, fileName);
-		}
-	}
-
-	/**
-	 * Uploads a file to Pinata's private storage
-	 * @param file - The file to upload
-	 * @param fileName - The name of the file
-	 * @returns Promise<string> - The IPFS hash of the uploaded file
-	 */
-	private async uploadPrivateFile(
-		file: File,
-		fileName: string
-	): Promise<string> {
-		try {
-			// Get signed upload URL
-			const signedUrlResponse = await fetch(
-				"https://uploads.pinata.cloud/v3/files/sign",
-				{
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${this.settings.pinataJwt}`,
-						"Content-Type": "application/json",
-					},
-					body: JSON.stringify({
-						date: Math.floor(Date.now() / 1000),
-						expires: 3600, // URL valid for 1 hour
-						filename: fileName,
-						keyvalues: {
-							isPrivate: "true",
-						},
-					}),
-				}
-			);
-
-			if (!signedUrlResponse.ok) {
-				const error = await signedUrlResponse.json().catch(() => ({
-					message: signedUrlResponse.statusText,
-				}));
-				throw new Error(
-					`Failed to get signed upload URL: ${
-						error.error ||
-						error.message ||
-						signedUrlResponse.statusText
-					}`
-				);
-			}
-
-			const { data: signedUrl } = await signedUrlResponse.json();
-
-			// Upload file using signed URL
-			const formData = new FormData();
-			formData.append("file", file);
-			const uploadResponse = await fetch(signedUrl, {
-				method: "POST",
-				body: formData,
-			});
-
-			if (!uploadResponse.ok) {
-				const error = await uploadResponse
-					.json()
-					.catch(() => ({ message: uploadResponse.statusText }));
-				throw new Error(
-					`Upload failed: ${
-						error.error ||
-						error.message ||
-						uploadResponse.statusText
-					}`
-				);
-			}
-
-			const data = await uploadResponse.json();
-			if (!data?.data?.cid) {
-				throw new Error("Upload failed - no CID returned in response");
-			}
-
-			return data.data.cid;
-		} catch (error) {
-			console.error("Upload error:", error);
-			throw new Error(
-				`Error uploading private file: ${
-					error instanceof Error ? error.message : String(error)
-				}`
-			);
-		}
-	}
-
-	/**
-	 * Uploads a file to Pinata's public storage
-	 * @param file - The file to upload
-	 * @param fileName - The name of the file
-	 * @returns Promise<string> - The IPFS hash of the uploaded file
-	 */
-	private async uploadPublicFile(
-		file: File,
-		fileName: string
-	): Promise<string> {
-		const formData = new FormData();
-		formData.append("file", file);
-
-		const options = {
-			pinataMetadata: {
-				name: fileName,
-				keyvalues: {
-					isPrivate: "false",
-				},
-			},
-			pinataOptions: {
-				cidVersion: 1,
-			},
-		};
-
-		formData.append("pinataOptions", JSON.stringify(options.pinataOptions));
+		// Add network parameter
 		formData.append(
-			"pinataMetadata",
-			JSON.stringify(options.pinataMetadata)
+			"network",
+			this.settings.isPrivate ? "private" : "public"
+		);
+		console.log(
+			"Network type:",
+			this.settings.isPrivate ? "private" : "public"
 		);
 
+		// Add group if enabled
+		if (this.settings.groups.enabled) {
+			try {
+				console.log(
+					"Getting/creating group for:",
+					this.settings.groups.name
+				);
+				const groupId = await this.getOrCreateGroup(
+					this.settings.groups.name
+				);
+				console.log("Using group ID:", groupId);
+				formData.append("group_id", groupId); // Changed from 'group' to 'group_id' to match API spec
+			} catch (error) {
+				console.error("Failed to get/create group:", error);
+				// Continue with upload even if group operation fails
+			}
+		}
+
+		formData.append("file", file);
+
 		try {
+			console.log("Uploading file to Pinata...");
 			const response = await fetch(
-				"https://api.pinata.cloud/pinning/pinFileToIPFS",
+				"https://uploads.pinata.cloud/v3/files",
 				{
 					method: "POST",
 					headers: {
@@ -1057,27 +961,34 @@ export default class PinataImageUploaderPlugin extends Plugin {
 				}
 			);
 
+			console.log("Upload response status:", response.status);
+			const uploadHeaders: Record<string, string> = {};
+			response.headers.forEach((value, key) => {
+				uploadHeaders[key] = value;
+			});
+			console.log("Upload response headers:", uploadHeaders);
+
 			if (!response.ok) {
-				const error = await response
-					.json()
-					.catch(() => ({ message: response.statusText }));
+				const errorText = await response.text();
+				console.error("Upload error response:", errorText);
 				throw new Error(
-					`Upload failed: ${
-						error.error || error.message || response.statusText
-					}`
+					`Upload failed: ${response.statusText} - ${errorText}`
 				);
 			}
 
 			const data = await response.json();
-			if (!data.IpfsHash) {
-				throw new Error("Upload failed - no IPFS hash returned");
+			console.log("Upload response data:", JSON.stringify(data, null, 2));
+
+			if (!data?.data?.cid) {
+				console.error("Invalid upload response:", data);
+				throw new Error("Upload failed - no CID returned in response");
 			}
 
-			return data.IpfsHash;
+			return data.data.cid;
 		} catch (error) {
 			console.error("Upload error:", error);
 			throw new Error(
-				`Error uploading public file: ${
+				`Error uploading file: ${
 					error instanceof Error ? error.message : String(error)
 				}`
 			);

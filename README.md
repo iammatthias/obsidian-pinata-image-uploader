@@ -85,6 +85,14 @@ A plugin for [Obsidian](https://obsidian.md) that uploads embedded images to [Pi
     -   When enabled: Files are stored privately and accessed via signed URLs
     -   When disabled: Files are publicly accessible via IPFS
 
+#### Groups
+
+-   **Enable Groups**: Toggle for organizing images into Pinata groups
+    -   When enabled: Images are organized into a named group in Pinata
+    -   **Group Name**: Name of the Pinata group to organize images
+    -   Groups are created automatically if they don't exist
+    -   Useful for organizing and managing images across your vault
+
 #### Upload Behavior
 
 -   **Auto-upload on Paste**: Automatically upload images when pasted

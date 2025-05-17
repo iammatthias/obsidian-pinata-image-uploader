@@ -29,6 +29,10 @@ export interface PinataSettings {
 	};
 	autoUploadPaste: boolean;
 	autoUploadDrag: boolean;
+	groups: {
+		enabled: boolean;
+		name: string;
+	};
 }
 
 export type ImageFormat = "auto" | "jpeg" | "png" | "webp" | "gif";
@@ -99,4 +103,8 @@ export const DEFAULT_SETTINGS: PinataSettings = {
 	},
 	autoUploadPaste: true,
 	autoUploadDrag: true,
+	groups: {
+		enabled: false,
+		name: "Obsidian Images",
+	},
 };
