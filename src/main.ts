@@ -439,12 +439,14 @@ export default class PinataImageUploaderPlugin extends Plugin {
 			ViewPlugin.fromClass(
 				class {
 					constructor(public view: EditorView) {
-						this.updateIpfsImages();
+						// Use a small delay to ensure DOM is ready
+						setTimeout(() => this.updateIpfsImages(), 100);
 					}
 
 					update(update: ViewUpdate) {
 						if (update.docChanged || update.viewportChanged) {
-							this.updateIpfsImages();
+							// Use a small delay to ensure DOM is updated
+							setTimeout(() => this.updateIpfsImages(), 50);
 						}
 					}
 
@@ -459,15 +461,72 @@ export default class PinataImageUploaderPlugin extends Plugin {
 								const ipfsHash = src.substring(
 									"ipfs://".length
 								);
+
+								// Skip if already processed (check if src attribute has been updated)
+								if (
+									!img
+										.getAttribute("src")
+										?.startsWith("ipfs://")
+								) {
+									continue;
+								}
+
 								try {
-									const signedUrl =
+									const gatewayUrl =
 										await pluginInstance.constructIpfsUrl(
 											ipfsHash
 										);
-									// Only update if different
-									if (img.src !== signedUrl) {
-										img.src = signedUrl;
+
+									// Update the src attribute directly
+									img.setAttribute("src", gatewayUrl);
+
+									// Add metadata for private images
+									if (pluginInstance.settings.isPrivate) {
+										img.setAttribute(
+											"data-pinata-private",
+											"true"
+										);
+										img.setAttribute(
+											"data-ipfs-hash",
+											ipfsHash
+										);
 									}
+
+									// Add loading class and handle load events
+									img.classList.add("ipfs-image-loading");
+
+									const handleLoad = () => {
+										img.classList.remove(
+											"ipfs-image-loading"
+										);
+										img.classList.add("ipfs-image-loaded");
+									};
+
+									const handleError = () => {
+										img.classList.remove(
+											"ipfs-image-loading"
+										);
+										img.classList.add("ipfs-image-error");
+										img.setAttribute(
+											"alt",
+											"⚠️ Failed to load IPFS image"
+										);
+									};
+
+									// Remove existing listeners to avoid duplicates
+									img.removeEventListener("load", handleLoad);
+									img.removeEventListener(
+										"error",
+										handleError
+									);
+
+									// Add new listeners
+									img.addEventListener("load", handleLoad, {
+										once: true,
+									});
+									img.addEventListener("error", handleError, {
+										once: true,
+									});
 								} catch (error) {
 									console.error(
 										"Failed to update IPFS image",
@@ -504,7 +563,10 @@ export default class PinataImageUploaderPlugin extends Plugin {
 						const gatewayUrl = await this.constructIpfsUrl(
 							ipfsHash
 						);
-						img.src = gatewayUrl;
+						// Use setAttribute for consistency
+						img.setAttribute("src", gatewayUrl);
+
+						// Add metadata for private images
 						if (this.settings.isPrivate) {
 							img.setAttribute("data-pinata-private", "true");
 							img.setAttribute("data-ipfs-hash", ipfsHash);
@@ -555,6 +617,18 @@ export default class PinataImageUploaderPlugin extends Plugin {
 		// Add styles for IPFS images
 		const style = document.createElement("style");
 		style.textContent = `
+			.ipfs-image-loading {
+				opacity: 0.5;
+				filter: blur(1px);
+				transition: opacity 0.3s ease-in-out, filter 0.3s ease-in-out;
+			}
+			
+			.ipfs-image-loaded {
+				opacity: 1;
+				filter: none;
+				transition: opacity 0.3s ease-in-out, filter 0.3s ease-in-out;
+			}
+			
 			.ipfs-image-error {
 				display: inline-block;
 				color: var(--text-error);
@@ -562,6 +636,8 @@ export default class PinataImageUploaderPlugin extends Plugin {
 				padding: 2px 4px;
 				border-radius: 4px;
 				background-color: var(--background-modifier-error);
+				opacity: 1;
+				filter: none;
 			}
 		`;
 		document.head.appendChild(style);
